@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>API Forward - Side Panel</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header>
+    <h1>API Forward</h1>
+    <button id="openOptionsBtn">打开选项页</button>
+  </header>
+
+  <section class="card">
+    <h2>拦截控制</h2>
+    <label class="switch">
+      <input type="checkbox" id="enabledToggle" />
+      <span class="slider"></span>
+    </label>
+    <span>启用拦截</span>
+  </section>
+
+
+  <div id="modalOverlay" class="modal-overlay"></div>
+  <div id="ruleModal" class="modal" aria-modal="true" role="dialog" aria-labelledby="ruleModalTitle">
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h3 id="ruleModalTitle">新建规则</h3>
+        <button id="modalClose" class="modal-close" aria-label="关闭">×</button>
+      </div>
+      <div class="modal-body">
+        <div id="wizard">
+          <div class="wizard-pane" data-step="1">
+            <h3>第一步：URL 规则</h3>
+            <div class="form-row">
+              <label>规则名称</label>
+              <input id="wizName" placeholder="如：重定向 v1 到 v2" />
+            </div>
+            <div class="form-row">
+              <label>匹配类型</label>
+              <select id="wizMatchType">
+                <option value="wildcard">通配符</option>
+                <option value="regex">正则表达式</option>
+              </select>
+            </div>
+            <div class="form-row">
+              <label>匹配模式</label>
+              <input id="wizPattern" placeholder="如 *://*.example.com/api/* 或 ^https?://.*/api/" />
+            </div>
+          </div>
+
+          <div class="wizard-pane" data-step="2">
+            <h3>第二步：请求前拦截（可选）</h3>
+            <h4>请求头修改</h4>
+            <table id="reqHeadersTable" class="kv-table">
+              <thead><tr><th>Header</th><th>Value</th><th>操作</th></tr></thead>
+              <tbody></tbody>
+            </table>
+            <button id="reqHeaderAdd">添加请求头</button>
+            <h4>查询参数修改</h4>
+            <table id="reqQueryTable" class="kv-table">
+              <thead><tr><th>Key</th><th>Value</th><th>操作</th></tr></thead>
+              <tbody></tbody>
+            </table>
+            <button id="reqQueryAdd">添加查询参数</button>
+            <h4>请求体修改</h4>
+            <textarea id="reqBodyEditor" placeholder="JSON 或文本。JSON 将尝试合并为 jsonMerge；否则作为字符串替换"></textarea>
+            <h4>连接替换 / 重定向</h4>
+            <div class="form-row">
+              <label>路径替换（from → to）</label>
+              <input id="reqPathFrom" placeholder="如 /api/v1" />
+              <input id="reqPathTo" placeholder="如 /api/v2" />
+            </div>
+            <p class="hint">说明：当请求 URL 的路径包含“from”时，替换为“to”。</p>
+          </div>
+
+          <div class="wizard-pane" data-step="3">
+            <h3>第三步：响应后拦截（可选，仅对 fetch 生效）</h3>
+            <h4>响应头修改</h4>
+            <table id="resHeadersTable" class="kv-table">
+              <thead><tr><th>Header</th><th>Value</th><th>操作</th></tr></thead>
+              <tbody></tbody>
+            </table>
+            <button id="resHeaderAdd">添加响应头</button>
+            <h4>响应体修改</h4>
+            <textarea id="resBodyEditor" placeholder="JSON 或文本。JSON 将尝试合并；否则作为字符串替换"></textarea>
+          </div>
+
+          <div class="wizard-pane" data-step="4">
+            <h3>第四步：保存</h3>
+            <p>未配置的拦截步骤将自动跳过，保存为 JSON。</p>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button id="modalConfirm">确定</button>
+        <button id="modalCancel">取消</button>
+      </div>
+    </div>
+  </div>
+  <section class="card">
+    <h2>规则列表</h2>
+    <button id="wizCreateBtn" class="header-action">新建规则</button>
+    <table id="rulesTable" class="list-table">
+      <thead><tr><th>名称</th><th>类型</th><th>模式</th><th>转发</th><th>启用</th><th>操作</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </section>
+
+  <section class="card">
+    <h2>历史记录</h2>
+    <div class="actions">
+      <input id="searchInput" placeholder="按 URL 搜索" />
+      <button id="exportBtn">导出</button>
+      <button id="clearBtn">清空</button>
+    </div>
+    <table id="historyTable" class="list-table">
+      <thead><tr><th>时间</th><th>方法</th><th>状态</th><th>URL</th><th>来源</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </section>
+
+  <script src="sidepanel.js"></script>
+</body>
+</html>

@@ -1,0 +1,38 @@
+{
+  "name": "APIForward",
+  "description": "通过侧边面板管理接口拦截、转发与记录的浏览器扩展",
+  "version": "0.1.0",
+  "manifest_version": 3,
+  "permissions": [
+    "storage",
+    "webRequest",
+    "declarativeNetRequest",
+    "sidePanel",
+    "downloads"
+  ],
+  "host_permissions": ["<all_urls>"],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "打开 APIForward 侧边面板"
+  },
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "options_page": "options.html",
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_start"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["sidepanel.html", "styles.css", "sidepanel.js", "utils.js"],
+      "matches": ["<all_urls>"]
+    }
+  ]
+}

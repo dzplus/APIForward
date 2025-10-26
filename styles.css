@@ -1,0 +1,117 @@
+/* Basic layout */
+body { font-family: -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Helvetica, Arial, sans-serif; margin: 0; padding: 0; background: #f7f7f9; color: #333; }
+header { display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; background: #fff; border-bottom: 1px solid #e5e7eb; }
+header h1 { font-size: 18px; margin: 0; }
+/* 全局统一按钮风格 */
+button { padding: 6px 10px; border: 1px solid #d1d5db; background: #fff; border-radius: 6px; cursor: pointer; font-size: 12px; }
+button:hover { background: #f9fafb; border-color: #cbd5e1; }
+
+.card { background: #fff; margin: 12px 16px; padding: 12px; border: 1px solid #e5e7eb; border-radius: 8px; box-shadow: 0 1px 2px rgba(0,0,0,0.04); }
+.card h2 { margin: 0 0 8px 0; font-size: 16px; }
+
+.form-row { display: flex; gap: 8px; align-items: center; margin: 8px 0; }
+.form-row label { min-width: 96px; font-size: 13px; color: #555; }
+.form-row input, .form-row select { flex: 1; padding: 6px 8px; border: 1px solid #d1d5db; border-radius: 6px; }
+
+.actions { display: flex; gap: 8px; margin-top: 8px; }
+.actions button { padding: 6px 10px; border: 1px solid #d1d5db; background: #fff; border-radius: 6px; cursor: pointer; }
+
+textarea { width: 100%; max-width: 100%; box-sizing: border-box; min-height: 120px; padding: 8px; border: 1px solid #d1d5db; border-radius: 6px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; font-size: 12px; }
+
+/* Switch */
+.switch { position: relative; display: inline-block; width: 42px; height: 24px; }
+.switch input { opacity: 0; width: 0; height: 0; }
+.slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #d1d5db; transition: .2s; border-radius: 24px; }
+.slider:before { position: absolute; content: ""; height: 18px; width: 18px; left: 3px; bottom: 3px; background-color: white; transition: .2s; border-radius: 50%; }
+input:checked + .slider { background-color: #4ade80; }
+input:checked + .slider:before { transform: translateX(18px); }
+
+/* Tables */
+.list-table, .kv-table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+.list-table th, .list-table td, .kv-table th, .kv-table td { border: 1px solid #e5e7eb; padding: 6px 8px; font-size: 12px; }
+/* 历史记录表格宽度跟随 section，避免溢出 */
+.list-table { max-width: 100%; table-layout: fixed; }
+.list-table th, .list-table td { word-break: break-word; overflow-wrap: anywhere; box-sizing: border-box; }
+/* 列表开关样式，保持与表格行高度一致 */
+.list-table input[type="checkbox"].rule-enabled,
+.list-table input[type="checkbox"].rule-forward {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+}
+.list-table thead, .kv-table thead { background: #f9fafb; }
+.kv-table input { width: 100%; padding: 4px 6px; border: 1px solid #d1d5db; border-radius: 6px; }
+.kv-table button.del { padding: 4px 8px; border: 1px solid #ef4444; color: #ef4444; background: #fff; border-radius: 6px; }
+
+/* 向导添加按钮的风格与通用按钮一致 */
+#reqHeaderAdd,
+#reqQueryAdd,
+#resHeaderAdd {
+  padding: 6px 10px;
+  border: 1px solid #d1d5db;
+  background: #fff;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+/* Wizard panes */
+.wizard-pane { border: 1px dashed #e5e7eb; border-radius: 6px; padding: 8px; }
+.wizard-steps { display: flex; gap: 8px; margin-bottom: 8px; }
+.wizard-steps button { padding: 6px 10px; border: 1px solid #d1d5db; background: #fff; border-radius: 6px; cursor: pointer; }
+
+/* Tabs */
+.tabs { display: flex; gap: 8px; }
+.tabs button { padding: 6px 10px; border: 1px solid #d1d5db; background: #fff; border-radius: 6px; cursor: pointer; }
+.tabs button.active { background: #f3f4f6; border-color: #9ca3af; }
+
+/* Modal overlay and dialog */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.45);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s ease;
+  z-index: 999;
+}
+.modal-overlay.open { opacity: 1; pointer-events: auto; }
+
+.modal {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s ease;
+  z-index: 1000;
+}
+.modal.open { opacity: 1; pointer-events: auto; }
+
+.modal-dialog {
+  width: 800px;
+  max-width: 90vw;
+  background: #fff;
+  border-radius: 8px;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+  transform: translateY(20px);
+  transition: transform 0.2s ease;
+}
+.modal.open .modal-dialog { transform: translateY(0); }
+
+.modal-header, .modal-footer {
+  padding: 12px 16px;
+  border-bottom: 1px solid #eee;
+}
+.modal-footer {
+  border-top: 1px solid #eee;
+  border-bottom: none;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.modal-body { padding: 16px; max-height: 70vh; overflow: auto; }
+.modal-close { background: transparent; border: none; font-size: 20px; line-height: 1; cursor: pointer; }
+.card > .header-action { float: right; }
+.card::after { content: ""; display: block; clear: both; }
