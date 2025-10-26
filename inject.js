@@ -4,7 +4,7 @@
 
   const MAX = 262144;
 
-  let cfg = {
+  let config = {
     enabled: true,
     forward: { enabled: false, url: "" },
     sensitiveKeys: ["authorization", "token", "password", "cookie"],
@@ -80,11 +80,16 @@
     return b;
   };
 
+  /**
+   * Decide whether to forward payload based on rule and global config.
+   * @param {Object|null} r - Matched rule or null.
+   * @returns {boolean} True if forwarding is enabled and not explicitly disabled by rule.
+   */
   const shouldF = (r) => {
     if (!r) return false;
     if (r.forward === true) return true;
     if (r.forward === false) return false;
-    return !!(cfg.forward && cfg.forward.enabled);
+    return !!(config.forward && config.forward.enabled);
   };
 
   const headObj = (h) => {
@@ -120,7 +125,7 @@
       let body = n && n.body !== undefined ? n.body : (typeof i === "object" ? i.body : undefined);
       let nn = { ...(n || {}) };
 
-      if (cfg.enabled && rule) {
+      if (config.enabled && rule) {
         const before = { url: newUrl, headerCount: (() => { try { return Array.from(headers.keys()).length; } catch (_) { return 0; } })(), hasBody: body !== undefined };
         if (rule.modify && rule.modify.query) {
           const prevUrl = newUrl;
@@ -245,7 +250,7 @@
           method,
           url: newUrl,
           status: resp.status,
-          headers: redact(h, cfg.sensitiveKeys),
+          headers: redact(h, config.sensitiveKeys),
           body: bt,
           source: "fetch",
           matched: !!rule
@@ -253,7 +258,7 @@
 
         console.log('[AF_MAIN] fetch.response', { status: payload.status, headerCount: (() => { try { return Object.keys(h).length; } catch (_) { return 0; } })(), bodyLength: (payload.body && payload.body.length) || 0, matched: !!rule });
         post("AF_LOG_RECORD", { record: payload });
-        if (cfg.enabled && shouldF(rule)) {
+        if (config.enabled && shouldF(rule)) {
           console.log('[AF_MAIN] forward.payload', { source: payload.source, status: payload.status, url: payload.url });
           post("AF_FORWARD_PAYLOAD", { payload });
         }
@@ -370,7 +375,7 @@
             method,
             url,
             status: x.status,
-            headers: redact(ho, cfg.sensitiveKeys),
+            headers: redact(ho, config.sensitiveKeys),
             body: bt,
             source: "xhr",
             matched: !!rule
@@ -413,8 +418,8 @@
       if (msg.type === "AF_CONFIG_UPDATE") {
         const d = msg.data || {};
         rules = Array.isArray(d.rules) ? d.rules : [];
-        cfg = { ...cfg, ...(d.config || {}) };
-        console.log('[AF_MAIN] config update', { rulesCount: rules.length, enabled: !!cfg.enabled, forwardEnabled: !!(cfg.forward && cfg.forward.enabled) });
+        config = { ...config, ...(d.config || {}) };
+        console.log('[AF_MAIN] config update', { rulesCount: rules.length, enabled: !!config.enabled, forwardEnabled: !!(config.forward && config.forward.enabled) });
       }
     });
 

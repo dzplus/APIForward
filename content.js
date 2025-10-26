@@ -1,5 +1,9 @@
 // APIForward Content Script: intercept fetch/XHR, modify and log
 (function () {
+  /**
+   * Main-world injection fallback via DOM.
+   * Ensures inject.js runs in page context if scripting registration fails.
+   */
   // Fallback: inject MAIN-world script via DOM to guarantee page-level overrides
   try {
     const injectorId = 'af-main-injector';
@@ -18,18 +22,31 @@
   } catch (e) { try { console.warn('[AF_CS] main-world injection fallback error:', e); } catch (_) {} }
 
   const originalFetch = window.fetch.bind(window);
-  const OriginalXHR = window.XMLHttpRequest;
+  /** Native XMLHttpRequest constructor reference (pre-override). */
+  const NativeXHR = window.XMLHttpRequest;
 
   let rulesCache = [];
   let configCache = { enabled: true, forward: { enabled: false, url: "" }, sensitiveKeys: ["authorization", "token", "password", "cookie"], historyLimit: 500, historyMatchOnly: false };
 
   const MAX_BODY_SIZE = 1024 * 1024; // 1MB cap for body capture
 
+  /**
+   * Convert wildcard pattern to a case-insensitive RegExp.
+   * @param {string} pattern - e.g. "*.example.com/api/*"
+   * @returns {RegExp} Compiled regular expression.
+   */
   function wildcardToRegExp(pattern) {
     const escaped = pattern.replace(/[.+^${}()|\[\]\\]/g, "\\$&");
     return new RegExp("^" + escaped.replace(/\*/g, ".*") + "$", "i");
   }
 
+  /**
+   * Check whether a rule matches given URL and method.
+   * @param {string} url - Request URL
+   * @param {string} method - HTTP method
+   * @param {Object} rule - Rule definition
+   * @returns {boolean} True if rule matches
+   */
   function matchByRule(url, method, rule) {
     const m = method.toUpperCase();
     const okMethod = !rule.method || rule.method.toUpperCase() === m || (Array.isArray(rule.method) && rule.method.map(x => x.toUpperCase()).includes(m));
@@ -43,6 +60,12 @@
     return conds.length ? conds.some(Boolean) : false;
   }
 
+  /**
+   * Find the first matching rule for URL/method.
+   * @param {string} url - Request URL
+   * @param {string} method - HTTP method
+   * @returns {Object|null} Matched rule or null
+   */
   function findFirstMatch(url, method) {
     for (const rule of rulesCache) {
       if (rule && rule.enabled === false) continue; // 跳过未启用规则
@@ -51,6 +74,12 @@
     return null;
   }
 
+  /**
+   * Redact sensitive keys in an object by masking values.
+   * @param {Object|string} obj - Source object or string
+   * @param {string[]} keys - Keys to redact
+   * @returns {Object|string} Redacted clone or original string
+   */
   function redact(obj, keys) {
     try {
       const clone = typeof obj === "string" ? obj : JSON.parse(JSON.stringify(obj));
@@ -69,6 +98,12 @@
     }
   }
 
+  /**
+   * Apply query parameter changes to a URL.
+   * @param {string} urlStr - Original URL
+   * @param {Object} changes - { set: {k:v}, remove: [k] }
+   * @returns {string} Updated URL
+   */
   function applyQueryChanges(urlStr, changes) {
     try {
       const u = new URL(urlStr, location.origin);
@@ -78,6 +113,12 @@
     } catch (_) { return urlStr; }
   }
 
+  /**
+   * Apply header changes to a fetch init object.
+   * @param {Object} init - Original init
+   * @param {Object} changes - { set: {k:v}, remove: [k] }
+   * @returns {Object} New init with headers merged
+   */
   function applyHeaderChanges(init, changes) {
     const headers = new Headers(init && init.headers || (typeof init === "object" && init.headers) || {});
     if (changes && changes.set) for (const [k, v] of Object.entries(changes.set)) headers.set(k, String(v));
@@ -85,6 +126,12 @@
     return { ...(init || {}), headers };
   }
 
+  /**
+   * Try to parse body as JSON based on headers.
+   * @param {any} body - Request body
+   * @param {Headers|Object} headers - Headers to inspect
+   * @returns {Object|null} Parsed JSON object or null
+   */
   function tryParseJson(body, headers) {
     const ct = headers && (headers.get ? headers.get("content-type") : headers["content-type"]) || "";
     if (typeof body === "string" && /json/i.test(ct)) { try { return JSON.parse(body); } catch (_) { return null; } }
@@ -92,6 +139,13 @@
     return null;
   }
 
+  /**
+   * Apply body changes: JSON merge or string replace.
+   * @param {any} body - Original body
+   * @param {Headers|Object} headers - Headers for content-type
+   * @param {Object} changes - Changes definition
+   * @returns {any} Updated body
+   */
   function applyBodyChanges(body, headers, changes) {
     if (!changes) return body;
     const obj = tryParseJson(body, headers);
@@ -108,6 +162,9 @@
     return body;
   }
 
+  /**
+   * Fetch initial configuration/rules from background and bridge to MAIN world.
+   */
   async function getInitialConfig() {
     try {
       const resp = await chrome.runtime.sendMessage({ type: "getConfig" });
@@ -120,16 +177,29 @@
     }
   }
 
+  /**
+   * Send a structured log record to background.
+   * @param {Object} record - Log payload
+   */
   function logRecord(record) {
     try { chrome.runtime.sendMessage({ type: "logRecord", record }); } catch (_) {}
   }
 
+  /**
+   * Determine whether to forward payload based on config and rule override.
+   * @param {Object|null} rule - Matched rule
+   * @returns {boolean} True if forwarding is enabled
+   */
   function shouldForward(rule) {
     if (!configCache.forward || !configCache.forward.enabled || !configCache.forward.url) return false;
     if (rule && rule.forward === false) return false;
     return true;
   }
 
+  /**
+   * Forward payload to server via background messaging or direct fetch fallback.
+   * @param {Object} payload - Forwarded data
+   */
   async function forwardToServer(payload) {
     try {
       await chrome.runtime.sendMessage({ type: 'forwardPayload', payload });
@@ -144,6 +214,9 @@
     }
   }
 
+  /**
+   * Override fetch() to apply rule-driven modifications and log lifecycle.
+   */
   // ---- fetch interception ----
   window.fetch = async function (input, init) {
     const url = typeof input === "string" ? input : (input && input.url) || String(input);
@@ -268,8 +341,9 @@
 
   // ---- XMLHttpRequest interception ----
   function wrapXHR() {
+    /** Create a wrapped XHR that applies rule modifications and logs lifecycle. */
     function XHR() {
-      const xhr = new OriginalXHR();
+      const xhr = new NativeXHR();
       let url = ""; let originalUrl = ""; let method = "GET"; let sendBody = null; let rule = null;
 
       const origOpen = xhr.open.bind(xhr);
@@ -321,17 +395,33 @@
         return origSend(sendBody);
       };
 
-      xhr.addEventListener("load", () => {
+      xhr.addEventListener("load", async () => {
         try {
           let bodyText = "";
           try { bodyText = xhr.responseText || ""; } catch (_) {}
           if (bodyText && bodyText.length > MAX_BODY_SIZE) bodyText = bodyText.slice(0, MAX_BODY_SIZE);
-          const headersRaw = xhr.getAllResponseHeaders() || "";
-          const headersObj = {};
-          headersRaw.split("\n").forEach(line => { const i = line.indexOf(":"); if (i > -1) headersObj[line.slice(0, i).trim().toLowerCase()] = line.slice(i + 1).trim(); });
-          const payload = { ts: Date.now(), type: "post-response", method, url, status: xhr.status, headers: redact(headersObj, configCache.sensitiveKeys), body: bodyText, source: "xhr", matched: !!rule };
+
+          const raw = xhr.getAllResponseHeaders() || "";
+          const ho = {};
+          raw.split("\n").forEach((line) => {
+            const i = line.indexOf(":");
+            if (i > -1)
+              ho[line.slice(0, i).trim().toLowerCase()] = line.slice(i + 1).trim();
+          });
+
+          const payload = {
+            ts: Date.now(),
+            type: "post-response",
+            method,
+            url,
+            status: xhr.status,
+            headers: redact(ho, configCache.sensitiveKeys),
+            body: bodyText,
+            source: "xhr",
+            matched: !!rule
+          };
           logRecord(payload);
-          if (configCache.enabled && shouldForward(rule)) forwardToServer(payload);
+          if (configCache.enabled && shouldForward(rule)) await forwardToServer(payload);
         } catch (_) {}
       });
 
@@ -341,6 +431,7 @@
 
       return xhr;
     }
+
     window.XMLHttpRequest = XHR;
   }
 
