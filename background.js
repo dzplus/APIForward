@@ -2,8 +2,8 @@
 
 const DEFAULT_CONFIG = {
   enabled: true,
-  forward: { enabled: false, url: "" },
-  sensitiveKeys: ["authorization", "token", "password", "cookie"],
+  forward: { url: "" },
+
   historyLimit: 500,
   historyMatchOnly: false
 };
@@ -18,7 +18,7 @@ async function initConfig() {
   ]);
   rulesCache = Array.isArray(rules) ? rules : [];
   configCache = { ...DEFAULT_CONFIG, ...(config || {}) };
-  console.log('[AF_BG] initConfig:', { rulesCount: rulesCache.length, enabled: !!configCache.enabled, forwardEnabled: !!(configCache.forward && configCache.forward.enabled), forwardUrl: (configCache.forward && configCache.forward.url) || '', historyMatchOnly: !!configCache.historyMatchOnly, historyLoaded: Array.isArray(history) ? history.length : 0 });
+  console.log('[AF_BG] initConfig:', { rulesCount: rulesCache.length, enabled: !!configCache.enabled, forwardUrl: (configCache.forward && configCache.forward.url) || '', historyMatchOnly: !!configCache.historyMatchOnly, historyLoaded: Array.isArray(history) ? history.length : 0 });
   await applyDNRFromRules();
 }
 
@@ -69,11 +69,12 @@ chrome.storage.onChanged.addListener((changes, area) => {
       const nv = changes.config.newValue || {};
       console.log('[AF_BG] storage(local).config changed:', {
         enabled: !!nv.enabled,
-        forwardEnabled: !!(nv.forward && nv.forward.enabled),
         forwardUrl: (nv.forward && nv.forward.url) || '',
         historyMatchOnly: !!nv.historyMatchOnly,
         historyLimit: nv.historyLimit
       });
+      // Refresh DNR rules when global enable toggles
+      applyDNRFromRules();
     }
   }
   if (area === "sync") {
@@ -196,7 +197,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     try {
       console.log('[AF_BG] onMessage:', msg && msg.type, 'from', (sender && sender.id) || 'unknown');
       if (msg.type === "getConfig") {
-        console.log('[AF_BG] getConfig: returning', { rulesCount: rulesCache.length, enabled: !!configCache.enabled, forwardEnabled: !!(configCache.forward && configCache.forward.enabled), historyMatchOnly: !!configCache.historyMatchOnly });
+        console.log('[AF_BG] getConfig: returning', { rulesCount: rulesCache.length, enabled: !!configCache.enabled, historyMatchOnly: !!configCache.historyMatchOnly });
         sendResponse({ rules: rulesCache, config: configCache });
       } else if (msg.type === "setRules") {
         rulesCache = Array.isArray(msg.rules) ? msg.rules : [];
@@ -207,7 +208,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       } else if (msg.type === "setConfig") {
         configCache = { ...configCache, ...(msg.config || {}) };
         await chrome.storage.local.set({ config: configCache });
-        console.log('[AF_BG] setConfig:', { enabled: !!configCache.enabled, forwardEnabled: !!(configCache.forward && configCache.forward.enabled), forwardUrl: (configCache.forward && configCache.forward.url) || '', historyMatchOnly: !!configCache.historyMatchOnly });
+        console.log('[AF_BG] setConfig:', { enabled: !!configCache.enabled, forwardUrl: (configCache.forward && configCache.forward.url) || '', historyMatchOnly: !!configCache.historyMatchOnly });
+        // Refresh DNR to reflect global enabled changes
+        await applyDNRFromRules();
         sendResponse({ ok: true });
       } else if (msg.type === "logRecord") {
         console.log('[AF_BG] logRecord:', msg.record && msg.record.type, msg.record && msg.record.url, 'matched=', msg.record && msg.record.matched);
@@ -229,10 +232,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         sendResponse({ ok: true });
       } else if (msg.type === "forwardPayload") {
         const url = (configCache.forward && configCache.forward.url) || "";
-        const enabled = !!(configCache.forward && configCache.forward.enabled);
-        console.log('[AF_BG] forwardPayload:', { enabled, url });
-        if (!enabled || !url) {
-          sendResponse({ ok: false, error: "forward disabled" });
+        console.log('[AF_BG] forwardPayload:', { url });
+        if (!url) {
+          sendResponse({ ok: false, error: "forward url missing" });
         } else {
           try {
             await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(msg.payload || {}) });
@@ -263,6 +265,12 @@ function applyDNRFromRules() {
       const addRules = [];
       let nextId = 1000;
       function escapeRegExp(s){ return s.replace(/[.+^${}()|\[\]\\]/g, "\\$&"); }
+      // If globally disabled, ensure no dynamic rules are active
+      if (!configCache.enabled) {
+        await chrome.declarativeNetRequest.updateDynamicRules({ addRules: [], removeRuleIds });
+        console.log('[AF_BG] applyDNRFromRules: globally disabled -> removed', removeRuleIds.length, 'added 0');
+        return;
+      }
       for (const rule of rulesCache) {
         if (rule && rule.enabled === false) continue; // 跳过未启用规则
         const redirect = rule.action && rule.action.redirect;

@@ -10,7 +10,7 @@
   <header class="app-header">
     <h1>APIForward 设置</h1>
     <div class="toggles">
-      <span class="hint">在此配置自动转发与敏感字段，以及高级规则 JSON</span>
+      <span class="hint">在此配置转发目标，以及高级规则 JSON</span>
     </div>
   </header>
 
@@ -24,17 +24,10 @@
   <section id="tabPaneConfig" class="card">
     <h2>转发配置</h2>
     <div class="form-row">
-      <label>自动转发响应</label>
-      <input type="checkbox" id="autoForwardToggle" />
-    </div>
-    <div class="form-row">
       <label>目标服务器地址</label>
       <input type="text" id="forwardUrl" placeholder="http://localhost:9000/collect" />
     </div>
-    <div class="form-row">
-      <label>敏感字段（逗号分隔）</label>
-      <input type="text" id="sensitiveKeys" placeholder="authorization,token,password,cookie" />
-    </div>
+
     <div class="form-row">
       <label>仅命中规则时记录历史</label>
       <input type="checkbox" id="historyMatchOnlyToggle" />
@@ -42,7 +35,7 @@
     <div class="form-row">
       <button id="saveConfigBtn">保存配置</button>
     </div>
-    <p class="hint">提示：已启用的记录将自动脱敏以上键值。</p>
+
   </section>
 
   <section id="tabPaneAdvanced" class="card" hidden>

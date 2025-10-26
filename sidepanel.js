@@ -65,16 +65,39 @@
   }
 
   function addRow(table, key='', value='') {
+    const tbody = table && table.querySelector('tbody');
+    if (!tbody) return;
     const tr = document.createElement('tr');
-    tr.innerHTML = `<td><input type="text" value="${key}" /></td><td><input type="text" value="${value}" /></td><td><button class="del">删除</button></td>`;
-    tr.querySelector('.del').addEventListener('click', () => tr.remove());
-    table.querySelector('tbody').appendChild(tr);
+
+    const tdKey = document.createElement('td');
+    const inputKey = document.createElement('input');
+    inputKey.type = 'text';
+    inputKey.value = key || '';
+    tdKey.appendChild(inputKey);
+
+    const tdVal = document.createElement('td');
+    const inputVal = document.createElement('input');
+    inputVal.type = 'text';
+    inputVal.value = value || '';
+    tdVal.appendChild(inputVal);
+
+    const tdOps = document.createElement('td');
+    const delBtn = document.createElement('button');
+    delBtn.className = 'del';
+    delBtn.textContent = '删除';
+    delBtn.addEventListener('click', () => tr.remove());
+    tdOps.appendChild(delBtn);
+
+    tr.appendChild(tdKey);
+    tr.appendChild(tdVal);
+    tr.appendChild(tdOps);
+    tbody.appendChild(tr);
   }
 
   async function loadConfig() {
     const { config = null, history = [] } = await storeLocal.get(["config", "history"]);
     const { rules = null } = await storeSync.get(["rules"]);
-    const cfg = config || { enabled: true, forward: { enabled: false, url: "" }, sensitiveKeys: ["authorization", "token", "password", "cookie"], historyLimit: 500 };
+    const cfg = config || { enabled: true, forward: { url: "" }, historyLimit: 500 };
     dom.enabledToggle.checked = !!cfg.enabled;
 
     const rs = rules || SAMPLE_RULES;
@@ -157,8 +180,7 @@
     const { config = null } = await storeLocal.get(['config']);
     const merged = {
       enabled: dom.enabledToggle.checked,
-      forward: (config && config.forward) || { enabled: false, url: '' },
-      sensitiveKeys: (config && config.sensitiveKeys) || ["authorization","token","password","cookie"],
+      forward: { url: ((config && config.forward && config.forward.url) || '') },
       historyLimit: (config && config.historyLimit) || 500,
       historyMatchOnly: (config && typeof config.historyMatchOnly !== 'undefined') ? !!config.historyMatchOnly : false
     };

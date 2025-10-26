@@ -26,7 +26,7 @@
   const NativeXHR = window.XMLHttpRequest;
 
   let rulesCache = [];
-  let configCache = { enabled: true, forward: { enabled: false, url: "" }, sensitiveKeys: ["authorization", "token", "password", "cookie"], historyLimit: 500, historyMatchOnly: false };
+  let configCache = { enabled: true, forward: { url: "" }, historyLimit: 500, historyMatchOnly: false };
 
   const MAX_BODY_SIZE = 1024 * 1024; // 1MB cap for body capture
 
@@ -74,29 +74,7 @@
     return null;
   }
 
-  /**
-   * Redact sensitive keys in an object by masking values.
-   * @param {Object|string} obj - Source object or string
-   * @param {string[]} keys - Keys to redact
-   * @returns {Object|string} Redacted clone or original string
-   */
-  function redact(obj, keys) {
-    try {
-      const clone = typeof obj === "string" ? obj : JSON.parse(JSON.stringify(obj));
-      const keySet = new Set((keys || []).map(k => String(k).toLowerCase()));
-      const walk = (o) => {
-        if (!o || typeof o !== "object") return;
-        for (const k of Object.keys(o)) {
-          if (keySet.has(String(k).toLowerCase())) o[k] = "***";
-          else walk(o[k]);
-        }
-      };
-      if (typeof clone === "object") walk(clone);
-      return clone;
-    } catch (_) {
-      return obj;
-    }
-  }
+
 
   /**
    * Apply query parameter changes to a URL.
@@ -170,7 +148,7 @@
       const resp = await chrome.runtime.sendMessage({ type: "getConfig" });
       rulesCache = resp.rules || [];
       configCache = resp.config || configCache;
-      console.log('[AF_CS] initConfig', { rulesCount: rulesCache.length, enabled: !!configCache.enabled, forwardEnabled: !!(configCache.forward && configCache.forward.enabled) });
+      console.log('[AF_CS] initConfig', { rulesCount: rulesCache.length, enabled: !!configCache.enabled, forwardUrl: (configCache.forward && configCache.forward.url) || '' });
       try { window.postMessage({ ns: "AF", type: "AF_CONFIG_UPDATE", data: { config: configCache, rules: rulesCache } }, "*" ); } catch (_) {}
     } catch (_) {
       // ignore in non-extension
@@ -191,9 +169,8 @@
    * @returns {boolean} True if forwarding is enabled
    */
   function shouldForward(rule) {
-    if (!configCache.forward || !configCache.forward.enabled || !configCache.forward.url) return false;
-    if (rule && rule.forward === false) return false;
-    return true;
+    if (!rule || rule.forward !== true) return false;
+    return !!(configCache.forward && configCache.forward.url);
   }
 
   /**
@@ -327,7 +304,7 @@
         method,
         url: newUrl,
         status: response.status,
-        headers: redact(headersObj, configCache.sensitiveKeys),
+        headers: headersObj,
         body: bodyText,
         source: "fetch",
         matched: !!rule
@@ -415,7 +392,7 @@
             method,
             url,
             status: xhr.status,
-            headers: redact(ho, configCache.sensitiveKeys),
+            headers: ho,
             body: bodyText,
             source: "xhr",
             matched: !!rule
@@ -441,7 +418,7 @@
     if (area === "local") {
       if (changes.config) {
         configCache = changes.config.newValue || configCache;
-        console.log('[AF_CS] storage(local).config -> bridge AF_CONFIG_UPDATE', { enabled: !!configCache.enabled, forwardEnabled: !!(configCache.forward && configCache.forward.enabled) });
+        console.log('[AF_CS] storage(local).config -> bridge AF_CONFIG_UPDATE', { enabled: !!configCache.enabled, forwardUrl: (configCache.forward && configCache.forward.url) || '' });
         try { window.postMessage({ ns: "AF", type: "AF_CONFIG_UPDATE", data: { config: configCache, rules: rulesCache } }, "*"); } catch (_) {}
       }
     }
