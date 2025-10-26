@@ -1,10 +1,27 @@
 // APIForward Content Script: intercept fetch/XHR, modify and log
 (function () {
+  // Fallback: inject MAIN-world script via DOM to guarantee page-level overrides
+  try {
+    const injectorId = 'af-main-injector';
+    if (!document.getElementById(injectorId)) {
+      const s = document.createElement('script');
+      s.id = injectorId;
+      s.src = chrome.runtime.getURL('inject.js');
+      s.type = 'text/javascript';
+      s.dataset.af = '1';
+      s.addEventListener('load', () => {
+        try { console.log('[AF_CS] main-world injected via DOM'); } catch (_) {}
+        try { window.postMessage({ ns: 'AF', type: 'AF_GET_CONFIG' }, '*'); } catch (_) {}
+      });
+      (document.documentElement || document.head || document.body).appendChild(s);
+    }
+  } catch (e) { try { console.warn('[AF_CS] main-world injection fallback error:', e); } catch (_) {} }
+
   const originalFetch = window.fetch.bind(window);
   const OriginalXHR = window.XMLHttpRequest;
 
   let rulesCache = [];
-  let configCache = { enabled: true, forward: { enabled: false, url: "" }, sensitiveKeys: ["authorization", "token", "password", "cookie"], historyLimit: 500 };
+  let configCache = { enabled: true, forward: { enabled: false, url: "" }, sensitiveKeys: ["authorization", "token", "password", "cookie"], historyLimit: 500, historyMatchOnly: false };
 
   const MAX_BODY_SIZE = 1024 * 1024; // 1MB cap for body capture
 
@@ -96,6 +113,8 @@
       const resp = await chrome.runtime.sendMessage({ type: "getConfig" });
       rulesCache = resp.rules || [];
       configCache = resp.config || configCache;
+      console.log('[AF_CS] initConfig', { rulesCount: rulesCache.length, enabled: !!configCache.enabled, forwardEnabled: !!(configCache.forward && configCache.forward.enabled) });
+      try { window.postMessage({ ns: "AF", type: "AF_CONFIG_UPDATE", data: { config: configCache, rules: rulesCache } }, "*" ); } catch (_) {}
     } catch (_) {
       // ignore in non-extension
     }
@@ -131,11 +150,13 @@
     const method = (init && init.method) || (typeof input === "object" && input.method) || "GET";
     const start = Date.now();
     const rule = findFirstMatch(url, method);
+    console.log('[AF_CS] fetch.begin', { method, url, hasInit: !!init, isRequest: (input instanceof Request), matched: !!rule });
 
     let newUrl = url;
     let newInit = { ...(init || {}) };
 
     if (configCache.enabled && rule) {
+      const before = { url: newUrl, headerCount: (() => { try { const h = new Headers(newInit.headers || {}); return Array.from(h.keys()).length; } catch (_) { return 0; } })(), hasBody: newInit.body !== undefined };
       // pre-request: modify params
       if (rule.modify) {
         if (rule.modify.query) newUrl = applyQueryChanges(newUrl, rule.modify.query);
@@ -148,14 +169,41 @@
       else if (redirect && redirect.pathReplace) {
         try { const u = new URL(newUrl, location.origin); u.pathname = u.pathname.replace(redirect.pathReplace.from || "", redirect.pathReplace.to || ""); newUrl = u.toString(); } catch (_) {}
       }
-      logRecord({ type: "pre-request", ts: Date.now(), method, url, finalUrl: newUrl, source: "fetch" });
+      const after = { url: newUrl, headerCount: (() => { try { const h = new Headers(newInit.headers || {}); return Array.from(h.keys()).length; } catch (_) { return 0; } })(), hasBody: newInit.body !== undefined };
+      console.log('[AF_CS] fetch.apply', { method, matched: !!rule, before, after });
     }
+    // always log pre-request; background decides whether to keep based on historyMatchOnly
+    logRecord({ type: "pre-request", ts: Date.now(), method, url, finalUrl: newUrl, source: "fetch", matched: !!rule });
 
     let response;
     try {
-      response = await originalFetch(newUrl, newInit);
+      // 保留原始方法与 Request 选项，避免 POST 变成 GET
+      newInit.method = method;
+      if (typeof input === "object") {
+        try {
+          const req = new Request(newUrl, {
+            method,
+            headers: newInit.headers,
+            body: newInit.body,
+            mode: input.mode,
+            credentials: input.credentials,
+            cache: input.cache,
+            redirect: input.redirect,
+            referrer: input.referrer,
+            referrerPolicy: input.referrerPolicy,
+            integrity: input.integrity,
+            keepalive: input.keepalive,
+            signal: newInit.signal || input.signal
+          });
+          response = await originalFetch(req);
+        } catch (_) {
+          response = await originalFetch(newUrl, newInit);
+        }
+      } else {
+        response = await originalFetch(newUrl, newInit);
+      }
     } catch (err) {
-      logRecord({ type: "error", ts: Date.now(), method, url: newUrl, error: String(err), source: "fetch" });
+      logRecord({ type: "error", ts: Date.now(), method, url: newUrl, error: String(err), source: "fetch", matched: !!rule });
       throw err;
     }
 
@@ -207,7 +255,9 @@
         url: newUrl,
         status: response.status,
         headers: redact(headersObj, configCache.sensitiveKeys),
-        body: bodyText
+        body: bodyText,
+        source: "fetch",
+        matched: !!rule
       };
       logRecord(payload);
       if (configCache.enabled && shouldForward(rule)) await forwardToServer(payload);
@@ -244,25 +294,30 @@
             } catch (_) {}
           }
         }
+        console.log('[AF_CS] xhr.open', { method, url: originalUrl, finalUrl: url, matched: !!rule });
         return origOpen(method, url, async, user, pass);
       };
 
       xhr.setRequestHeader = function (k, v) {
         if (configCache.enabled && rule && rule.modify && rule.modify.headers) {
-          const rm = rule.modify.headers.remove || [];
+          const rm = (rule.modify.headers.remove || []).map(s => String(s).toLowerCase());
           const set = rule.modify.headers.set || {};
-          if (rm.includes(k)) return; // skip
-          if (Object.prototype.hasOwnProperty.call(set, k)) v = String(set[k]);
+          const setLC = Object.fromEntries(Object.entries(set).map(([kk, vv]) => [String(kk).toLowerCase(), vv]));
+          const kn = String(k).toLowerCase();
+          if (rm.includes(kn)) { console.log('[AF_CS] xhr.setRequestHeader: removed header by rule', { name: k }); return; }
+          if (Object.prototype.hasOwnProperty.call(setLC, kn)) { const nv = String(setLC[kn]); console.log('[AF_CS] xhr.setRequestHeader: overridden header by rule', { name: k, value: nv }); v = nv; }
         }
         return origSetHeader(k, v);
       };
 
       xhr.send = function (body) {
         sendBody = body;
-        if (configCache.enabled && rule && rule.modify && rule.modify.body) {
+        const triedBodyChange = !!(configCache.enabled && rule && rule.modify && rule.modify.body);
+        if (triedBodyChange) {
           sendBody = applyBodyChanges(sendBody, {}, rule.modify.body);
         }
-        logRecord({ type: "pre-request", ts: Date.now(), method, url: originalUrl, finalUrl: url, source: "xhr" });
+        console.log('[AF_CS] xhr.send', { method, url: originalUrl, finalUrl: url, matched: !!rule, hasBody: body !== undefined, triedBodyChange });
+        logRecord({ type: "pre-request", ts: Date.now(), method, url: originalUrl, finalUrl: url, source: "xhr", matched: !!rule });
         return origSend(sendBody);
       };
 
@@ -274,14 +329,14 @@
           const headersRaw = xhr.getAllResponseHeaders() || "";
           const headersObj = {};
           headersRaw.split("\n").forEach(line => { const i = line.indexOf(":"); if (i > -1) headersObj[line.slice(0, i).trim().toLowerCase()] = line.slice(i + 1).trim(); });
-          const payload = { ts: Date.now(), type: "post-response", method, url, status: xhr.status, headers: redact(headersObj, configCache.sensitiveKeys), body: bodyText, source: "xhr" };
+          const payload = { ts: Date.now(), type: "post-response", method, url, status: xhr.status, headers: redact(headersObj, configCache.sensitiveKeys), body: bodyText, source: "xhr", matched: !!rule };
           logRecord(payload);
           if (configCache.enabled && shouldForward(rule)) forwardToServer(payload);
         } catch (_) {}
       });
 
       xhr.addEventListener("error", () => {
-        logRecord({ type: "error", ts: Date.now(), method, url, error: "xhr error", source: "xhr" });
+        logRecord({ type: "error", ts: Date.now(), method, url, error: "xhr error", source: "xhr", matched: !!rule });
       });
 
       return xhr;
@@ -293,12 +348,40 @@
   getInitialConfig();
   chrome.storage && chrome.storage.onChanged && chrome.storage.onChanged.addListener((changes, area) => {
     if (area === "local") {
-      if (changes.config) configCache = changes.config.newValue || configCache;
+      if (changes.config) {
+        configCache = changes.config.newValue || configCache;
+        console.log('[AF_CS] storage(local).config -> bridge AF_CONFIG_UPDATE', { enabled: !!configCache.enabled, forwardEnabled: !!(configCache.forward && configCache.forward.enabled) });
+        try { window.postMessage({ ns: "AF", type: "AF_CONFIG_UPDATE", data: { config: configCache, rules: rulesCache } }, "*"); } catch (_) {}
+      }
     }
     if (area === "sync") {
-      if (changes.rules) rulesCache = changes.rules.newValue || [];
+      if (changes.rules) {
+        rulesCache = changes.rules.newValue || [];
+        console.log('[AF_CS] storage(sync).rules -> bridge AF_CONFIG_UPDATE', { rulesCount: rulesCache.length });
+        try { window.postMessage({ ns: "AF", type: "AF_CONFIG_UPDATE", data: { config: configCache, rules: rulesCache } }, "*"); } catch (_) {}
+      }
     }
   });
 
+  // Bridge messages with MAIN world injector
+  window.addEventListener("message", (e) => {
+    const msg = e.data || {};
+    if (!msg || msg.ns !== "AF") return;
+    if (msg.type === "AF_GET_CONFIG") {
+      console.log('[AF_CS] bridge: AF_GET_CONFIG -> request config from background');
+      chrome.runtime.sendMessage({ type: "getConfig" }, (res) => {
+        console.log('[AF_CS] bridge: AF_CONFIG_UPDATE <- background response', { rulesCount: (res && res.rules && res.rules.length) || 0, enabled: !!(res && res.config && res.config.enabled) });
+        try { window.postMessage({ ns: "AF", type: "AF_CONFIG_UPDATE", data: res || {} }, "*" ); } catch (_) {}
+      });
+    } else if (msg.type === "AF_LOG_RECORD") {
+      const record = (msg.data && msg.data.record) || msg.record;
+      console.log('[AF_CS] bridge: AF_LOG_RECORD -> background', { type: record && record.type, url: record && record.url, matched: record && record.matched });
+      if (record) chrome.runtime.sendMessage({ type: "logRecord", record });
+    } else if (msg.type === "AF_FORWARD_PAYLOAD") {
+      const payload = (msg.data && msg.data.payload) || msg.payload;
+      console.log('[AF_CS] bridge: AF_FORWARD_PAYLOAD -> background');
+      if (payload) chrome.runtime.sendMessage({ type: "forwardPayload", payload });
+    }
+  });
   wrapXHR();
 })();

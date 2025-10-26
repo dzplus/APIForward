@@ -30,6 +30,7 @@
     autoForwardToggle: document.getElementById('autoForwardToggle'),
     forwardUrl: document.getElementById('forwardUrl'),
     sensitiveKeys: document.getElementById('sensitiveKeys'),
+    historyMatchOnlyToggle: document.getElementById('historyMatchOnlyToggle'),
     saveConfigBtn: document.getElementById('saveConfigBtn'),
     // advanced rules
     rulesEditor: document.getElementById('rulesEditor'),
@@ -54,10 +55,11 @@
 
   async function loadConfig() {
     const { config = null } = await store.get(['config']);
-    const cfg = config || { enabled: true, forward: { enabled: false, url: '' }, sensitiveKeys: ["authorization","token","password","cookie"], historyLimit: 500 };
+    const cfg = config || { enabled: true, forward: { enabled: false, url: '' }, sensitiveKeys: ["authorization","token","password","cookie"], historyLimit: 500, historyMatchOnly: false };
     dom.autoForwardToggle.checked = !!(cfg.forward && cfg.forward.enabled);
     dom.forwardUrl.value = (cfg.forward && cfg.forward.url) || '';
     dom.sensitiveKeys.value = (cfg.sensitiveKeys || []).join(',');
+    if (dom.historyMatchOnlyToggle) dom.historyMatchOnlyToggle.checked = !!cfg.historyMatchOnly;
   }
 
   async function loadRules() {
@@ -73,7 +75,8 @@
       enabled: (config && typeof config.enabled !== 'undefined') ? !!config.enabled : true,
       forward: { enabled: dom.autoForwardToggle.checked, url: dom.forwardUrl.value.trim() },
       sensitiveKeys: keys,
-      historyLimit: (config && config.historyLimit) || 500
+      historyLimit: (config && config.historyLimit) || 500,
+      historyMatchOnly: !!(dom.historyMatchOnlyToggle && dom.historyMatchOnlyToggle.checked)
     };
     await store.set({ config: merged });
     if (isExt) try { await chrome.runtime.sendMessage({ type: 'setConfig', config: merged }); } catch (_) {}

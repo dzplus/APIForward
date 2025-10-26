@@ -159,7 +159,8 @@
       enabled: dom.enabledToggle.checked,
       forward: (config && config.forward) || { enabled: false, url: '' },
       sensitiveKeys: (config && config.sensitiveKeys) || ["authorization","token","password","cookie"],
-      historyLimit: (config && config.historyLimit) || 500
+      historyLimit: (config && config.historyLimit) || 500,
+      historyMatchOnly: (config && typeof config.historyMatchOnly !== 'undefined') ? !!config.historyMatchOnly : false
     };
     await storeLocal.set({ config: merged });
     if (isExt) try { await chrome.runtime.sendMessage({ type: 'setConfig', config: merged }); } catch (_) {}
