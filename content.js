@@ -210,7 +210,8 @@
       // pre-request: modify params
       if (rule.modify) {
         if (rule.modify.query) newUrl = applyQueryChanges(newUrl, rule.modify.query);
-        if (rule.modify.headers) newInit = applyHeaderChanges(newInit, rule.modify.headers);
+        // 改头由 DNR 处理，页面层不再改动请求头
+        // if (rule.modify.headers) newInit = applyHeaderChanges(newInit, rule.modify.headers);
         if (rule.modify.body) newInit.body = applyBodyChanges(newInit.body, newInit.headers, rule.modify.body);
       }
       // redirect (app-level)
@@ -268,11 +269,12 @@
       // 应用响应修改（仅当规则配置了 responseModify）
       if (configCache.enabled && rule && rule.responseModify) {
         const newHeaders = new Headers(response.headers);
-        const rh = rule.responseModify.headers;
-        if (rh) {
-          if (rh.set) for (const [k, v] of Object.entries(rh.set)) newHeaders.set(k, String(v));
-          if (rh.remove) for (const k of rh.remove) newHeaders.delete(k);
-        }
+        // 改头由 DNR 处理，这里仅根据规则修改响应体
+        // const rh = rule.responseModify.headers;
+        // if (rh) {
+        //   if (rh.set) for (const [k, v] of Object.entries(rh.set)) newHeaders.set(k, String(v));
+        //   if (rh.remove) for (const k of rh.remove) newHeaders.delete(k);
+        // }
         let finalText = bodyText;
         const rb = rule.responseModify.body;
         if (rb) {
@@ -350,14 +352,7 @@
       };
 
       xhr.setRequestHeader = function (k, v) {
-        if (configCache.enabled && rule && rule.modify && rule.modify.headers) {
-          const rm = (rule.modify.headers.remove || []).map(s => String(s).toLowerCase());
-          const set = rule.modify.headers.set || {};
-          const setLC = Object.fromEntries(Object.entries(set).map(([kk, vv]) => [String(kk).toLowerCase(), vv]));
-          const kn = String(k).toLowerCase();
-          if (rm.includes(kn)) { console.log('[AF_CS] xhr.setRequestHeader: removed header by rule', { name: k }); return; }
-          if (Object.prototype.hasOwnProperty.call(setLC, kn)) { const nv = String(setLC[kn]); console.log('[AF_CS] xhr.setRequestHeader: overridden header by rule', { name: k, value: nv }); v = nv; }
-        }
+        // 改头由 DNR 处理，页面层不再移除或覆盖请求头
         return origSetHeader(k, v);
       };
 

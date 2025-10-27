@@ -273,12 +273,14 @@ function applyDNRFromRules() {
       }
       for (const rule of rulesCache) {
         if (rule && rule.enabled === false) continue; // 跳过未启用规则
+        // --- Redirect rules ---
         const redirect = rule.action && rule.action.redirect;
+        let regexFilter = null;
+        if (rule.exact) regexFilter = '^' + escapeRegExp(rule.exact) + '$';
+        else if (rule.wildcard) regexFilter = wildcardToRegExp(rule.wildcard).source;
+        else if (rule.regex) regexFilter = rule.regex;
+        // Redirect
         if (typeof redirect === 'string' && redirect.startsWith('http')) {
-          let regexFilter = null;
-          if (rule.exact) regexFilter = '^' + escapeRegExp(rule.exact) + '$';
-          else if (rule.wildcard) regexFilter = wildcardToRegExp(rule.wildcard).source;
-          else if (rule.regex) regexFilter = rule.regex;
           if (!regexFilter) continue;
           const cond = { regexFilter, resourceTypes: ["main_frame","sub_frame","xmlhttprequest","other"] };
           if (rule.method) {
@@ -286,10 +288,56 @@ function applyDNRFromRules() {
           }
           addRules.push({ id: nextId++, priority: 1, action: { type: 'redirect', redirect: { url: redirect } }, condition: cond });
         }
+        // --- Request header modify via DNR ---
+        const mh = rule && rule.modify && rule.modify.headers;
+        if (mh) {
+          if (!regexFilter) {
+            regexFilter = null;
+            if (rule.exact) regexFilter = '^' + escapeRegExp(rule.exact) + '$';
+            else if (rule.wildcard) regexFilter = wildcardToRegExp(rule.wildcard).source;
+            else if (rule.regex) regexFilter = rule.regex;
+          }
+          if (regexFilter) {
+            const cond = { regexFilter, resourceTypes: ["main_frame","sub_frame","xmlhttprequest","other"] };
+            if (rule.method) {
+              cond.requestMethods = Array.isArray(rule.method) ? rule.method.map(m => m.toLowerCase()) : [String(rule.method).toLowerCase()];
+            }
+            const ops = [];
+            if (mh.set) for (const [k,v] of Object.entries(mh.set)) ops.push({ header: String(k), operation: 'set', value: String(v) });
+            if (mh.remove) for (const k of mh.remove) ops.push({ header: String(k), operation: 'remove' });
+            if (ops.length > 0) {
+              addRules.push({ id: nextId++, priority: 1, action: { type: 'modifyHeaders', requestHeaders: ops }, condition: cond });
+            }
+          }
+        }
+        // --- Response header modify via DNR ---
+        const rh = rule && rule.responseModify && rule.responseModify.headers;
+        if (rh) {
+          if (!regexFilter) {
+            regexFilter = null;
+            if (rule.exact) regexFilter = '^' + escapeRegExp(rule.exact) + '$';
+            else if (rule.wildcard) regexFilter = wildcardToRegExp(rule.wildcard).source;
+            else if (rule.regex) regexFilter = rule.regex;
+          }
+          if (regexFilter) {
+            const cond = { regexFilter, resourceTypes: ["main_frame","sub_frame","xmlhttprequest","other"] };
+            if (rule.method) {
+              cond.requestMethods = Array.isArray(rule.method) ? rule.method.map(m => m.toLowerCase()) : [String(rule.method).toLowerCase()];
+            }
+            const ops = [];
+            if (rh.set) for (const [k,v] of Object.entries(rh.set)) ops.push({ header: String(k), operation: 'set', value: String(v) });
+            if (rh.remove) for (const k of rh.remove) ops.push({ header: String(k), operation: 'remove' });
+            if (ops.length > 0) {
+              addRules.push({ id: nextId++, priority: 1, action: { type: 'modifyHeaders', responseHeaders: ops }, condition: cond });
+            }
+          }
+        }
       }
       await chrome.declarativeNetRequest.updateDynamicRules({ addRules, removeRuleIds });
       console.log('[AF_BG] applyDNRFromRules: removed', removeRuleIds.length, 'added', addRules.length);
-    } catch (_) {}
+    } catch (e) {
+      console.warn('[AF_BG] applyDNRFromRules error:', e);
+    }
   })();
 }
 

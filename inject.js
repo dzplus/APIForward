@@ -118,12 +118,10 @@
         try {
             const H = new Headers(h || {});
             if (c && c.set) for (const [k, v] of Object.entries(c.set)) {
-                if (isUnsafeHeaderName(k)) { console.log('[AF_MAIN] 跳过设置不安全请求头', { name: k, value: String(v) }); continue; }
-                H.set(k, String(v));
+                try { H.set(k, String(v)); } catch (e) { console.log('[AF_MAIN] 设置请求头失败', { name: k, value: String(v), error: String(e) }); }
             }
             if (c && c.remove) for (const k of c.remove) {
-                if (isUnsafeHeaderName(k)) { console.log('[AF_MAIN] 跳过移除不安全请求头', { name: k }); continue; }
-                H.delete(k);
+                try { H.delete(k); } catch (e) { console.log('[AF_MAIN] 移除请求头失败', { name: k, error: String(e) }); }
             }
             return H;
         } catch (_) {
@@ -176,8 +174,9 @@
                 (n && n.method ? String(n.method) :
                     (typeof i === "object" && i.method ? String(i.method) : "GET"));
 
-            // 通过 find(url, method) 在规则集中查找首个命中项
-            const rule = find(url, method);
+            // 通过 find(url, method) 在规则集中查找首个命中项（使用绝对 URL 进行匹配）
+            const matchUrl = (() => { try { return new URL(url, location.href).toString(); } catch (_) { return url; } })();
+            const rule = find(matchUrl, method);
             console.log('[AF_MAIN] 请求开始', { method, url, hasInit: !!n, isRequest: (i instanceof Request), matched: !!rule });
             if (rule) {
                 console.log('[AF_MAIN] 规则命中', { kind: (rule.exact ? 'exact' : (rule.regex ? 'regex' : (rule.wildcard ? 'wildcard' : 'unknown'))), name: rule.name || '', method, url });
@@ -200,31 +199,8 @@
                 // mh: 头部修改配置（set/remove）
                 const mh = (rule.modify && rule.modify.headers) || null;
                 if (mh) {
-                    const baseEntries = (() => { try { return Array.from(headers.entries()); } catch(_) { return []; } })();
-                    const baseMap = new Map(baseEntries);
-
-                    headers = hChange(headers, mh);
+                    // 改头改由 DNR 处理：页面层不再执行请求头设置/移除
                     nn.headers = headers;
-
-                    const finalEntries = (() => { try { return Array.from(headers.entries()); } catch(_) { return []; } })();
-                    const finalMap = new Map(finalEntries);
-                    const added = [];
-                    const changed = [];
-                    const removed = [];
-                    baseMap.forEach((bv, bk) => {
-                        if (!finalMap.has(bk)) removed.push(bk);
-                        else if (String(finalMap.get(bk)) !== String(bv)) changed.push({ name: bk, from: String(bv), to: String(finalMap.get(bk)) });
-                    });
-                    finalMap.forEach((fv, fk) => {
-                        if (!baseMap.has(fk)) added.push({ name: fk, value: String(fv) });
-                    });
-
-                    console.log('[AF_MAIN] 请求头原始汇总', { count: baseEntries.length, headers: baseEntries });
-                    console.log('[AF_MAIN] 请求头最终汇总', { count: finalEntries.length, headers: finalEntries });
-                    console.log('[AF_MAIN] 请求头差异', { added, changed, removed });
-
-                    if (mh.set) for (const [k, v] of Object.entries(mh.set)) console.log('[AF_MAIN] 请求头设置', { name: k, value: String(v) });
-                    if (mh.remove) for (const k of mh.remove) console.log('[AF_MAIN] 请求头移除', { name: k });
                 } else {
                     nn.headers = headers;
                 }
@@ -389,12 +365,10 @@
                 method = String(m || "GET");
                 url = String(u || "");
                 orig = url;
-
-                rule = find(url, method);
-            
-                 if (rule) {
-                    console.log('[AF_MAIN] XHR 规则命中', { kind: (rule.exact ? 'exact' : (rule.regex ? 'regex' : (rule.wildcard ? 'wildcard' : 'unknown'))), name: rule.name || '', method, url });
-                    }
+                // 使用绝对 URL 进行规则匹配，避免仅有路径导致无法命中
+                const matchUrl = (() => { try { return new URL(url, location.href).toString(); } catch (_) { return url; } })();
+                rule = find(matchUrl, method);
+                console.log('[AF_MAIN] XHR 规则', { url:url,rule: rule,config:config });
                 if (config.enabled && rule) {
                     if (rule.modify && rule.modify.query) url = qChange(url, rule.modify.query);
 
@@ -409,7 +383,6 @@
                         } catch (_) { }
                     }
                 }
-
                 console.log('[AF_MAIN] XHR 打开', { method, url: orig, finalUrl: url, matched: !!rule });
                 return oo(method, url, a, user, p);
             };
@@ -419,33 +392,15 @@
                 const ov = String(v);
                 let vv = ov;
                 const kn = String(k).toLowerCase();
-                // 不安全请求头：直接跳过原生设置，避免控制台警告与无效写入
-                if (isUnsafeHeaderName(k)) {
-                    console.log('[AF_MAIN] XHR 跳过不安全请求头', { name: k, attempted: ov });
-                    return;
-                }
                 // 记录原始大小写名称，确保后续发送阶段使用一致大小写避免重复
                 try { x.__afHeaderCase.set(kn, String(k)); } catch (_) {}
-                if (config.enabled && rule && rule.modify && rule.modify.headers) {
-                    // rm: 需删除的头部列表（小写）
-                    const rm = (rule.modify.headers.remove || []).map(s => String(s).toLowerCase());
-                    // set: 要设置的头部键值
-                    const set = rule.modify.headers.set || {};
-                    // setLC: 小写键映射，便于比较与覆盖
-                    const setLC = Object.fromEntries(Object.entries(set).map(([kk, vv]) => [String(kk).toLowerCase(), vv]));
-                    if (rm.includes(kn)) {
-                        console.log('[AF_MAIN] XHR 规则移除请求头', { name: k, attempted: ov });
-                        try { x.__afHeaders.delete(kn); x.__afHeaderCase.delete(kn); } catch (_) {}
-                        return;
-                    }
-                    if (Object.prototype.hasOwnProperty.call(setLC, kn)) {
-                        vv = String(setLC[kn]);
-                        console.log('[AF_MAIN] XHR 规则覆盖请求头', { name: k, from: ov, to: vv });
-                    }
-                }
+                // 改头由 DNR 处理：不依据规则移除或覆盖请求头
                 try { x.__afHeaders.set(kn, vv); x.__afHeaderCase.set(kn, String(k)); } catch (_) {}
                 console.log('[AF_MAIN] XHR 捕获请求头', { name: k, attempted: ov, final: vv });
-                return osh(k, vv);
+                try { return osh(k, vv); } catch (e) {
+                    console.log('[AF_MAIN] XHR 设置请求头失败', { name: k, attempted: ov, final: vv, error: String(e) });
+                    return;
+                }
             };
 
             // send：可修改 body，并在发送前记录预请求
@@ -456,52 +411,7 @@
                 if (triedBodyChange)
                     sendBody = bodyChange(sendBody, {}, rule.modify.body);
 
-                // 发送前自动应用头设置：以站点已设置的头为“基底”，传入 hChange 统一计算
-                try {
-                    if (config.enabled && rule && rule.modify && rule.modify.headers) {
-                        const baseH = new Headers();
-                        try { x.__afHeaders && x.__afHeaders.forEach((val, key) => baseH.set(key, String(val))); } catch (_) {}
-                        const finalH = hChange(baseH, rule.modify.headers);
-
-                        const baseEntries = (() => { try { return Array.from((x.__afHeaders || new Map()).entries()); } catch(_) { return []; } })();
-                        const finalEntries = Array.from(finalH.entries());
-                        const baseMap = new Map(baseEntries);
-                        const finalMap = new Map(finalEntries);
-                        const added = [];
-                        const changed = [];
-                        const removed = [];
-                        baseMap.forEach((bv, bk) => {
-                            if (!finalMap.has(bk)) removed.push(bk);
-                            else if (String(finalMap.get(bk)) !== String(bv)) changed.push({ name: bk, from: String(bv), to: String(finalMap.get(bk)) });
-                        });
-                        finalMap.forEach((fv, fk) => {
-                            if (!baseMap.has(fk)) added.push({ name: fk, value: String(fv) });
-                        });
-
-                        console.log('[AF_MAIN] XHR 原始已设置请求头汇总', { count: baseEntries.length, headers: baseEntries });
-                        console.log('[AF_MAIN] XHR 最终请求头汇总', { count: finalEntries.length, headers: finalEntries });
-                        console.log('[AF_MAIN] XHR 请求头差异', { added, changed, removed });
-
-                        // 仅对新增或变更的头进行 set，避免重复设置
-                        finalEntries.forEach(([k, v]) => {
-                            const prev = baseMap.get(k);
-                            if (String(prev) !== String(v)) {
-                                const outName = (x.__afHeaderCase && x.__afHeaderCase.get(k)) || k;
-                                if (isUnsafeHeaderName(outName)) {
-                                    console.log('[AF_MAIN] XHR 跳过不安全请求头设置', { name: outName, value: String(v) });
-                                } else {
-                                    osh(outName, String(v));
-                                    console.log('[AF_MAIN] XHR 设置请求头', { name: outName, value: String(v) });
-                                    try {
-                                        x.__afHeaders.set(String(k).toLowerCase(), String(v));
-                                        x.__afHeaderCase.set(String(k).toLowerCase(), String(outName));
-                                    } catch (_) {}
-                                }
-                            }
-                        });
-                    }
-                } catch (_) { }
-
+                // 改头由 DNR 处理：发送阶段不再批量设置或移除请求头
                 console.log('[AF_MAIN] XHR 发送', { method, url: orig, finalUrl: url, matched: !!rule, hasBody: b !== undefined, triedBodyChange });
                 post("AF_LOG_RECORD", {
                     record: {
@@ -515,7 +425,10 @@
                     }
                 });
 
-                return os(sendBody);
+                try { return os(sendBody); } catch (e) {
+                    console.log('[AF_MAIN] XHR 发送失败', { method, url: url, error: String(e) });
+                    throw e;
+                }
             };
 
             // 响应后记录与转发（xhr.load）
