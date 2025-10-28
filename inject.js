@@ -6,19 +6,86 @@
     const MAX = 262144; // 捕获响应体的最大长度（字节上限）
 
   // 全局配置（由后台/内容脚本桥接更新）
-  // - enabled: 是否启用主世界拦截与修改
-  // - forward: 是否开启转发及目标地址
+  // - forward: 转发目标地址配置
   // - historyLimit: 历史记录保留上限
   // - historyMatchOnly: 仅记录命中规则的请求
   let config = {
-        enabled: false, // default disabled until config bridged from background
-        forward: { enabled: false, url: "" },
+        forward: { url: "" },
         historyLimit: 500,
         historyMatchOnly: false
     };
 
     // 规则列表：每条规则包含匹配条件（exact/wildcard/regex/any/all、method）和动作（modify/redirect/forward）
   let rules = [];
+
+    // 应用路径替换规则：支持单个或多个路径替换
+    // url: 原始URL字符串；pathReplace: 路径替换配置（对象或数组）
+    const applyPathReplace = (url, pathReplace) => {
+        console.log('[AF_MAIN] applyPathReplace', { url, pathReplace, originalUrl: url });
+        if (!pathReplace) return url;
+        
+        try {
+            const U = new URL(url, location.origin);
+            const beforePath = U.pathname;
+            
+            if (Array.isArray(pathReplace)) {
+                // 多个路径替换，按顺序执行
+                pathReplace.forEach(pr => {
+                    if (pr && typeof pr === 'object' && pr.from !== undefined) {
+                        U.pathname = U.pathname.replace(pr.from || "", pr.to || "");
+                    }
+                });
+            } else if (typeof pathReplace === 'object' && pathReplace.from !== undefined) {
+                // 单个路径替换（向后兼容）
+                U.pathname = U.pathname.replace(pathReplace.from || "", pathReplace.to || "");
+            }
+            
+            const newUrl = U.toString();
+            if (newUrl !== url) {
+                console.log('[AF_MAIN] 路径替换', { 
+                    from: beforePath, 
+                    to: U.pathname, 
+                    rules: Array.isArray(pathReplace) ? pathReplace.length : 1,
+                    originalUrl: url
+                });
+            }
+            return newUrl;
+        } catch (_) {
+            return url;
+        }
+    };
+
+    // 应用主机替换规则：支持单个或多个主机替换
+    // url: 原始URL字符串；hostReplace: 主机替换配置（对象或数组）
+    const applyHostReplace = (url, hostReplace) => {
+        console.log('[AF_MAIN] applyHostReplace', { url, hostReplace, originalUrl: url });
+        if (!hostReplace) return url;
+        try {
+            const U = new URL(url, location.origin);
+            const beforeHost = U.host;
+            if (Array.isArray(hostReplace)) {
+                hostReplace.forEach(hr => {
+                    if (hr && typeof hr === 'object' && hr.from !== undefined) {
+                        U.host = U.host.replace(hr.from || '', hr.to || '');
+                    }
+                });
+            } else if (typeof hostReplace === 'object' && hostReplace.from !== undefined) {
+                U.host = U.host.replace(hostReplace.from || '', hostReplace.to || '');
+            }
+            const newUrl = U.toString();
+            if (newUrl !== url) {
+                console.log('[AF_MAIN] 主机替换', {
+                    from: beforeHost,
+                    to: U.host,
+                    rules: Array.isArray(hostReplace) ? hostReplace.length : 1,
+                    originalUrl: url
+                });
+            }
+            return newUrl;
+        } catch (_) {
+            return url;
+        }
+    };
 
     // 将简单通配符模式（*）转换为正则表达式，用于 URL 匹配
   const toRE = (p) =>
@@ -27,43 +94,32 @@
         );
 
     /**
-   * 规则匹配函数
-   * @param {string} u URL 字符串
-   * @param {string} m HTTP 方法
-   * @param {Object} r 规则对象
-   * @returns {boolean} 是否命中规则
-   */
-  const match = (u, m, r) => {
-        m = m.toUpperCase(); // 统一方法大小写（GET/POST/PUT/DELETE...）
-        const ok =
-            !r.method ||
-            r.method.toUpperCase() === m ||
-            (Array.isArray(r.method) && r.method.map((x) => x.toUpperCase()).includes(m));
-        if (!ok) return false;
-
-        const c = [];
-        if (r.exact) c.push(u === r.exact);
-        if (r.wildcard) c.push(toRE(r.wildcard).test(u));
-        if (r.regex) {
-            try {
-                c.push(new RegExp(r.regex).test(u));
-            } catch (_) { }
-        }
-        if (r.any && Array.isArray(r.any)) c.push(r.any.some((x) => match(u, m, x)));
-        if (r.all && Array.isArray(r.all)) c.push(r.all.every((x) => match(u, m, x)));
-        return c.length ? c.some(Boolean) : false;
-    };
-
-    /**
-   * 在规则集中查找首个命中的规则
+   * 查找首个命中的规则（整合匹配与查找）
    * @param {string} u URL 字符串
    * @param {string} m HTTP 方法
    * @returns {Object|null} 命中的规则或 null
    */
-  const find = (u, m) => {
+  const findMatch = (u, m) => {
+        const M = String(m || '').toUpperCase();
+        const isMatch = (r) => {
+            if (!r) return false;
+            const okMethod = !r.method ||
+                String(r.method).toUpperCase() === M ||
+                (Array.isArray(r.method) && r.method.map((x) => String(x).toUpperCase()).includes(M));
+            if (!okMethod) return false;
+
+            const checks = [];
+            if (r.exact) checks.push(u === r.exact);
+            if (r.wildcard) checks.push(toRE(r.wildcard).test(u));
+            if (r.regex) { try { checks.push(new RegExp(r.regex).test(u)); } catch (_) { } }
+            if (r.any && Array.isArray(r.any)) checks.push(r.any.some((x) => isMatch(x)));
+            if (r.all && Array.isArray(r.all)) checks.push(r.all.every((x) => isMatch(x)));
+            return checks.length ? checks.some(Boolean) : false;
+        };
+
         for (const r of rules) {
-            if (r && r.enabled === false) continue; // skip disabled rules
-            if (match(u, m, r)) return r;
+            if (r && r.enabled === false) continue; // 跳过未启用规则
+            if (isMatch(r)) return r;
         }
         return null;
     };
@@ -83,17 +139,36 @@
         }
     };
 
-    // 修改请求体：当前实现为 JSON 文本的 remove/set 简并处理
-    // b: 原始 body（字符串）；_h: 头；c: { remove?: string[], set?: Record<string,any> }
+    // 修改请求体：支持 JSON 合并或字符串替换
+    // b: 原始 body；_h: 头；c: { jsonMerge?: object, stringReplace?: {from, to} }
     const bodyChange = (b, _h, c) => {
-        try {
-            if (typeof b === "string") {
-                const o = JSON.parse(b);
-                if (c.remove) for (const k of c.remove) delete o[k];
-                if (c.set) for (const [k, v] of Object.entries(c.set)) o[k] = v;
-                return JSON.stringify(o);
+        if (!c) return b;
+        
+        // 尝试 JSON 合并
+        if (c.jsonMerge && typeof c.jsonMerge === "object") {
+            try {
+                let obj = null;
+                if (typeof b === "string") {
+                    obj = JSON.parse(b);
+                } else if (b && typeof b === "object" && !(b instanceof FormData)) {
+                    obj = b;
+                }
+                
+                if (obj && typeof obj === "object") {
+                    const merged = { ...obj, ...c.jsonMerge };
+                    return JSON.stringify(merged);
+                }
+            } catch (_) {
+                console.log('[AF_MAIN] JSON 合并失败，原始 body 不是有效 JSON');
             }
-        } catch (_) { }
+        }
+        
+        // 字符串替换
+        if (typeof b === "string" && c.stringReplace) {
+            const { from = "", to = "" } = c.stringReplace;
+            return b.replaceAll(from, to);
+        }
+        
         return b;
     };
 
@@ -104,6 +179,7 @@
         "content-length","cookie","cookie2","date","dnt","expect","host","keep-alive","origin","referer","te","trailer","transfer-encoding","upgrade","via",
         "sec-ch-ua","sec-ch-ua-mobile","sec-ch-ua-platform","sec-fetch-mode","sec-fetch-site","sec-fetch-user","sec-fetch-dest"
     ]);
+    
     const isUnsafeHeaderName = (name) => {
         try {
             const n = String(name).toLowerCase();
@@ -137,7 +213,19 @@
     // 是否需要转发：仅当规则的 forward 为 true
     // r: 命中的规则对象
     const shouldF = (r) => {
-        return !!(r && r.forward === true);
+        const hasRule = !!r;
+        const ruleForwardEnabled = r && r.forward === true;
+        
+        console.log('[AF_MAIN] 检查是否需要转发', { 
+            hasRule, 
+            ruleForwardEnabled, 
+            ruleName: r && r.name,
+            forwardUrl: config.forward && config.forward.url
+        });
+        
+        const result = !!(r && r.forward === true);
+        console.log('[AF_MAIN] 转发决定:', result);
+        return result;
     };
 
     // 将 Headers 转换为普通对象，键统一为小写，便于记录与脱敏
@@ -176,10 +264,10 @@
 
             // 通过 find(url, method) 在规则集中查找首个命中项（使用绝对 URL 进行匹配）
             const matchUrl = (() => { try { return new URL(url, location.href).toString(); } catch (_) { return url; } })();
-            const rule = find(matchUrl, method);
-            console.log('[AF_MAIN] 请求开始', { method, url, hasInit: !!n, isRequest: (i instanceof Request), matched: !!rule });
+            const rule = findMatch(matchUrl, method);
+            console.log('[AF_MAIN] 请求开始', { method, url, hasInit: !!n, isRequest: (i instanceof Request), matched: !!rule, originalUrl: url });
             if (rule) {
-                console.log('[AF_MAIN] 规则命中', { kind: (rule.exact ? 'exact' : (rule.regex ? 'regex' : (rule.wildcard ? 'wildcard' : 'unknown'))), name: rule.name || '', method, url });
+                console.log('[AF_MAIN] 规则命中', { kind: (rule.exact ? 'exact' : (rule.regex ? 'regex' : (rule.wildcard ? 'wildcard' : 'unknown'))), name: rule.name || '', method, url, originalUrl: url });
             }
 
             // newUrl: 后续可能由 query 修改或 redirect 替换
@@ -188,12 +276,12 @@
             let body = n && n.body !== undefined ? n.body : (typeof i === "object" ? i.body : undefined);
             let nn = { ...(n || {}) };
 
-            if (config.enabled && rule) {
+            if (rule) {
                 const before = { url: newUrl, headerCount: (() => { try { return Array.from(headers.keys()).length; } catch (_) { return 0; } })(), hasBody: body !== undefined };
                 if (rule.modify && rule.modify.query) {
                     const prevUrl = newUrl;
                     newUrl = qChange(newUrl, rule.modify.query);
-                    console.log('[AF_MAIN] 请求查询参数修改', { beforeUrl: prevUrl, afterUrl: newUrl, changes: rule.modify.query });
+                    console.log('[AF_MAIN] 请求查询参数修改', { beforeUrl: prevUrl, afterUrl: newUrl, changes: rule.modify.query, originalUrl: url });
                 }
 
                 // mh: 头部修改配置（set/remove）
@@ -211,27 +299,22 @@
                     const beforeHasBody = body !== undefined;
                     body = bodyChange(body, headers, rule.modify.body);
                     const afterHasBody = body !== undefined;
-                    console.log('[AF_MAIN] 请求体修改', { attempted: true, beforeHasBody, afterHasBody });
+                    console.log('[AF_MAIN] 请求体修改', { attempted: true, beforeHasBody, afterHasBody, originalUrl: url });
                 }
                 if (body !== undefined) nn.body = body;
 
-                // rd: 重定向动作配置（字符串 URL 或 pathReplace）
+                // rd: 重定向动作配置（字符串 URL 或 hostReplace/pathReplace）
                 const rd = rule.action && rule.action.redirect;
                 if (typeof rd === "string" && rd.startsWith("http")) {
                     console.log('[AF_MAIN] 请求重定向', { to: rd });
                     newUrl = rd;
-                } else if (rd && rd.pathReplace) {
-                    try {
-                        const U = new URL(newUrl, location.origin);
-                        const beforePath = U.pathname;
-                        U.pathname = U.pathname.replace(rd.pathReplace.from || "", rd.pathReplace.to || "");
-                        newUrl = U.toString();
-                        console.log('[AF_MAIN] 路径替换', { from: rd.pathReplace.from || "", to: rd.pathReplace.to || "", beforePath, afterPath: U.pathname });
-                    } catch (_) { }
+                } else if (rd && typeof rd === 'object') {
+                    if (rd.hostReplace) newUrl = applyHostReplace(newUrl, rd.hostReplace);
+                    if (rd.pathReplace) newUrl = applyPathReplace(newUrl, rd.pathReplace);
                 }
                 // after: 修改后的摘要（URL、头数量、是否含 body、是否尝试改 body）
                 const after = { url: newUrl, headerCount: (() => { try { return Array.from(headers.keys()).length; } catch (_) { return 0; } })(), hasBody: body !== undefined, triedBodyChange };
-                console.log('[AF_MAIN] 请求修改应用完成', { method, matched: !!rule, before, after });
+                console.log('[AF_MAIN] 请求修改应用完成', { method, matched: !!rule, before, after, originalUrl: url });
             }
 
             post("AF_LOG_RECORD", {
@@ -320,10 +403,10 @@
                     matched: !!rule
                 };
 
-                console.log('[AF_MAIN] 响应返回', { status: payload.status, headerCount: (() => { try { return Object.keys(h).length; } catch (_) { return 0; } })(), bodyLength: (payload.body && payload.body.length) || 0, matched: !!rule });
+                console.log('[AF_MAIN] 响应返回', { status: payload.status, headerCount: (() => { try { return Object.keys(h).length; } catch (_) { return 0; } })(), bodyLength: (payload.body && payload.body.length) || 0, matched: !!rule, originalUrl: url });
                 post("AF_LOG_RECORD", { record: payload });
-                if (config.enabled && shouldF(rule)) {
-                    console.log('[AF_MAIN] 转发载荷', { source: payload.source, status: payload.status, url: payload.url });
+                if (shouldF(rule)) {
+                    console.log('[AF_MAIN] 转发载荷', { source: payload.source, status: payload.status, url: payload.url, originalUrl: url });
                     post("AF_FORWARD_PAYLOAD", { payload });
                 }
             } catch (_) { }
@@ -367,23 +450,26 @@
                 orig = url;
                 // 使用绝对 URL 进行规则匹配，避免仅有路径导致无法命中
                 const matchUrl = (() => { try { return new URL(url, location.href).toString(); } catch (_) { return url; } })();
-                rule = find(matchUrl, method);
-                console.log('[AF_MAIN] XHR 规则', { url:url,rule: rule,config:config });
-                if (config.enabled && rule) {
-                    if (rule.modify && rule.modify.query) url = qChange(url, rule.modify.query);
+                rule = findMatch(matchUrl, method);
+                console.log('[AF_MAIN] XHR 规则', { url:url,rule: rule,config:config, originalUrl: orig });
+                if (rule) {
+                    // 确保使用完整URL进行处理
+                    const fullUrl = (() => { try { return new URL(url, location.href).toString(); } catch (_) { return url; } })();
+                    let processedUrl = fullUrl;
+                    
+                    if (rule.modify && rule.modify.query) processedUrl = qChange(processedUrl, rule.modify.query);
 
                     const rd = rule.action && rule.action.redirect;
                     if (typeof rd === "string" && rd.startsWith("http")) {
-                        url = rd;
-                    } else if (rd && rd.pathReplace) {
-                        try {
-                            const U = new URL(url, location.origin);
-                            U.pathname = U.pathname.replace(rd.pathReplace.from || "", rd.pathReplace.to || "");
-                            url = U.toString();
-                        } catch (_) { }
+                        processedUrl = rd;
+                    } else if (rd && typeof rd === 'object') {
+                        if (rd.hostReplace) processedUrl = applyHostReplace(processedUrl, rd.hostReplace);
+                        if (rd.pathReplace) processedUrl = applyPathReplace(processedUrl, rd.pathReplace);
                     }
+                    
+                    url = processedUrl;
                 }
-                console.log('[AF_MAIN] XHR 打开', { method, url: orig, finalUrl: url, matched: !!rule });
+                console.log('[AF_MAIN] XHR 打开', { method, url: orig, finalUrl: url, matched: !!rule, originalUrl: orig });
                 return oo(method, url, a, user, p);
             };
 
@@ -396,9 +482,9 @@
                 try { x.__afHeaderCase.set(kn, String(k)); } catch (_) {}
                 // 改头由 DNR 处理：不依据规则移除或覆盖请求头
                 try { x.__afHeaders.set(kn, vv); x.__afHeaderCase.set(kn, String(k)); } catch (_) {}
-                console.log('[AF_MAIN] XHR 捕获请求头', { name: k, attempted: ov, final: vv });
+                console.log('[AF_MAIN] XHR 捕获请求头', { name: k, attempted: ov, final: vv, originalUrl: orig });
                 try { return osh(k, vv); } catch (e) {
-                    console.log('[AF_MAIN] XHR 设置请求头失败', { name: k, attempted: ov, final: vv, error: String(e) });
+                    console.log('[AF_MAIN] XHR 设置请求头失败', { name: k, attempted: ov, final: vv, error: String(e), originalUrl: orig });
                     return;
                 }
             };
@@ -407,12 +493,12 @@
             x.send = function (b) {
                 sendBody = b;
                 // triedBodyChange: 标记是否尝试修改 body
-                const triedBodyChange = !!(config.enabled && rule && rule.modify && rule.modify.body);
+                const triedBodyChange = !!(rule && rule.modify && rule.modify.body);
                 if (triedBodyChange)
                     sendBody = bodyChange(sendBody, {}, rule.modify.body);
 
                 // 改头由 DNR 处理：发送阶段不再批量设置或移除请求头
-                console.log('[AF_MAIN] XHR 发送', { method, url: orig, finalUrl: url, matched: !!rule, hasBody: b !== undefined, triedBodyChange });
+                console.log('[AF_MAIN] XHR 发送', { method, url: orig, finalUrl: url, matched: !!rule, hasBody: b !== undefined, triedBodyChange, originalUrl: orig });
                 post("AF_LOG_RECORD", {
                     record: {
                         type: "pre-request",
@@ -426,7 +512,7 @@
                 });
 
                 try { return os(sendBody); } catch (e) {
-                    console.log('[AF_MAIN] XHR 发送失败', { method, url: url, error: String(e) });
+                    console.log('[AF_MAIN] XHR 发送失败', { method, url: url, error: String(e), originalUrl: orig });
                     throw e;
                 }
             };
@@ -463,10 +549,10 @@
                         matched: !!rule
                     };
 
-                    console.log('[AF_MAIN] XHR 响应返回', { status: payload.status, headerCount: (() => { try { return Object.keys(ho).length; } catch (_) { return 0; } })(), bodyLength: (payload.body && payload.body.length) || 0, matched: !!rule });
+                    console.log('[AF_MAIN] XHR 响应返回', { status: payload.status, headerCount: (() => { try { return Object.keys(ho).length; } catch (_) { return 0; } })(), bodyLength: (payload.body && payload.body.length) || 0, matched: !!rule, originalUrl: orig });
                     post("AF_LOG_RECORD", { record: payload });
-                    if (config.enabled && shouldF(rule)) {
-                        console.log('[AF_MAIN] 转发载荷', { source: payload.source, status: payload.status, url: payload.url });
+                    if (shouldF(rule)) {
+                        console.log('[AF_MAIN] 转发载荷', { source: payload.source, status: payload.status, url: payload.url, originalUrl: orig });
                         post("AF_FORWARD_PAYLOAD", { payload });
                     }
                 } catch (_) { }
@@ -474,7 +560,7 @@
 
             // 错误事件：记录错误信息（xhr.error）
             x.addEventListener("error", () => {
-                console.log('[AF_MAIN] XHR 错误', { method, url, matched: !!rule });
+                console.log('[AF_MAIN] XHR 错误', { method, url, matched: !!rule, originalUrl: orig });
                 post("AF_LOG_RECORD", {
                     record: {
                         type: "error",

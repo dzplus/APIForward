@@ -27,10 +27,22 @@ input:checked + .slider { background-color: #4ade80; }
 input:checked + .slider:before { transform: translateX(18px); }
 
 /* Tables */
-.list-table, .kv-table { width: 100%; border-collapse: collapse; margin-top: 8px; }
-.list-table th, .list-table td, .kv-table th, .kv-table td { border: 1px solid #e5e7eb; padding: 6px 8px; font-size: 12px; }
+.list-table, .kv-table { 
+  width: 100%; 
+  border-collapse: collapse; 
+  margin-top: 8px; 
+  table-layout: fixed; 
+}
+.list-table th, .list-table td, .kv-table th, .kv-table td { 
+  border: 1px solid #e5e7eb; 
+  padding: 6px 8px; 
+  font-size: 12px; 
+  word-break: break-word; 
+  overflow-wrap: anywhere; 
+  box-sizing: border-box; 
+}
 /* 历史记录表格宽度跟随 section，避免溢出 */
-.list-table { max-width: 100%; table-layout: fixed; }
+.list-table { max-width: 100%; }
 .list-table th, .list-table td { word-break: break-word; overflow-wrap: anywhere; box-sizing: border-box; }
 /* 列表开关样式，保持与表格行高度一致 */
 .list-table input[type="checkbox"].rule-enabled,
@@ -40,7 +52,14 @@ input:checked + .slider:before { transform: translateX(18px); }
   cursor: pointer;
 }
 .list-table thead, .kv-table thead { background: #f9fafb; }
-.kv-table input { width: 100%; padding: 4px 6px; border: 1px solid #d1d5db; border-radius: 6px; }
+.kv-table input { 
+  width: 100%; 
+  max-width: 100%; 
+  box-sizing: border-box; 
+  padding: 4px 6px; 
+  border: 1px solid #d1d5db; 
+  border-radius: 6px; 
+}
 .kv-table button.del { padding: 4px 8px; border: 1px solid #ef4444; color: #ef4444; background: #fff; border-radius: 6px; }
 
 /* 向导添加按钮的风格与通用按钮一致 */

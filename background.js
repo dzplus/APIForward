@@ -1,9 +1,7 @@
 // APIForward Background Service Worker (MV3)
 
 const DEFAULT_CONFIG = {
-  enabled: true,
   forward: { url: "" },
-
   historyLimit: 500,
   historyMatchOnly: false
 };
@@ -18,7 +16,7 @@ async function initConfig() {
   ]);
   rulesCache = Array.isArray(rules) ? rules : [];
   configCache = { ...DEFAULT_CONFIG, ...(config || {}) };
-  console.log('[AF_BG] initConfig:', { rulesCount: rulesCache.length, enabled: !!configCache.enabled, forwardUrl: (configCache.forward && configCache.forward.url) || '', historyMatchOnly: !!configCache.historyMatchOnly, historyLoaded: Array.isArray(history) ? history.length : 0 });
+  console.log('[AF_BG] initConfig:', { rulesCount: rulesCache.length, forwardUrl: (configCache.forward && configCache.forward.url) || '', historyMatchOnly: !!configCache.historyMatchOnly, historyLoaded: Array.isArray(history) ? history.length : 0 });
   await applyDNRFromRules();
 }
 
@@ -68,7 +66,6 @@ chrome.storage.onChanged.addListener((changes, area) => {
       configCache = { ...DEFAULT_CONFIG, ...(changes.config.newValue || {}) };
       const nv = changes.config.newValue || {};
       console.log('[AF_BG] storage(local).config changed:', {
-        enabled: !!nv.enabled,
         forwardUrl: (nv.forward && nv.forward.url) || '',
         historyMatchOnly: !!nv.historyMatchOnly,
         historyLimit: nv.historyLimit
@@ -139,7 +136,7 @@ async function pushHistory(entry) {
 // --- webRequest interception for redirect/observe ---
 chrome.webRequest.onBeforeRequest.addListener(
   (details) => {
-    if (!configCache.enabled) return;
+    // 移除全局enabled检查，始终记录网络请求
     const matched = !!findFirstMatch(details.url, details.method || "GET");
     console.log('[AF_BG] webRequest.before', details.method || "GET", details.url, 'matched=', matched);
     pushHistory({
@@ -156,7 +153,7 @@ chrome.webRequest.onBeforeRequest.addListener(
 
 chrome.webRequest.onCompleted.addListener(
   (details) => {
-    if (!configCache.enabled) return;
+    // 移除全局enabled检查，始终记录网络请求
     const matched = !!findFirstMatch(details.url, details.method || "GET");
     console.log('[AF_BG] webRequest.completed', details.method, details.url, 'status=', details.statusCode, 'matched=', matched);
     pushHistory({
@@ -175,7 +172,7 @@ chrome.webRequest.onCompleted.addListener(
 
 chrome.webRequest.onErrorOccurred.addListener(
   (details) => {
-    if (!configCache.enabled) return;
+    // 移除全局enabled检查，始终记录网络请求
     const matched = !!findFirstMatch(details.url, details.method || "GET");
     console.log('[AF_BG] webRequest.error', details.method, details.url, 'error=', details.error, 'matched=', matched);
     pushHistory({
@@ -197,7 +194,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     try {
       console.log('[AF_BG] onMessage:', msg && msg.type, 'from', (sender && sender.id) || 'unknown');
       if (msg.type === "getConfig") {
-        console.log('[AF_BG] getConfig: returning', { rulesCount: rulesCache.length, enabled: !!configCache.enabled, historyMatchOnly: !!configCache.historyMatchOnly });
+        console.log('[AF_BG] getConfig: returning', { rulesCount: rulesCache.length, historyMatchOnly: !!configCache.historyMatchOnly });
         sendResponse({ rules: rulesCache, config: configCache });
       } else if (msg.type === "setRules") {
         rulesCache = Array.isArray(msg.rules) ? msg.rules : [];
@@ -208,13 +205,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       } else if (msg.type === "setConfig") {
         configCache = { ...configCache, ...(msg.config || {}) };
         await chrome.storage.local.set({ config: configCache });
-        console.log('[AF_BG] setConfig:', { enabled: !!configCache.enabled, forwardUrl: (configCache.forward && configCache.forward.url) || '', historyMatchOnly: !!configCache.historyMatchOnly });
+        console.log('[AF_BG] setConfig:', { forwardUrl: (configCache.forward && configCache.forward.url) || '', historyMatchOnly: !!configCache.historyMatchOnly });
         // Refresh DNR to reflect global enabled changes
         await applyDNRFromRules();
-        sendResponse({ ok: true });
-      } else if (msg.type === "logRecord") {
-        console.log('[AF_BG] logRecord:', msg.record && msg.record.type, msg.record && msg.record.url, 'matched=', msg.record && msg.record.matched);
-        await pushHistory(msg.record);
         sendResponse({ ok: true });
       } else if (msg.type === "getHistory") {
         const { history = [] } = await chrome.storage.local.get(["history"]);
@@ -232,16 +225,23 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         sendResponse({ ok: true });
       } else if (msg.type === "forwardPayload") {
         const url = (configCache.forward && configCache.forward.url) || "";
-        console.log('[AF_BG] forwardPayload:', { url });
+        console.log('[AF_BG] 收到转发请求，目标URL:', url);
+        console.log('[AF_BG] 转发载荷详情:', JSON.stringify(msg.payload, null, 2));
         if (!url) {
+          console.log('[AF_BG] 转发失败：未配置转发URL');
           sendResponse({ ok: false, error: "forward url missing" });
         } else {
           try {
-            await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(msg.payload || {}) });
-            console.log('[AF_BG] forwardPayload: success');
+            console.log('[AF_BG] 开始向服务器转发数据...');
+            const response = await fetch(url, { 
+              method: "POST", 
+              headers: { "content-type": "application/json" }, 
+              body: JSON.stringify(msg.payload || {}) 
+            });
+            console.log('[AF_BG] 转发成功，服务器响应状态:', response.status);
             sendResponse({ ok: true });
           } catch (e) {
-            console.warn('[AF_BG] forwardPayload error:', e);
+            console.warn('[AF_BG] 转发失败，错误信息:', String(e));
             sendResponse({ ok: false, error: String(e) });
           }
         }
@@ -265,12 +265,7 @@ function applyDNRFromRules() {
       const addRules = [];
       let nextId = 1000;
       function escapeRegExp(s){ return s.replace(/[.+^${}()|\[\]\\]/g, "\\$&"); }
-      // If globally disabled, ensure no dynamic rules are active
-      if (!configCache.enabled) {
-        await chrome.declarativeNetRequest.updateDynamicRules({ addRules: [], removeRuleIds });
-        console.log('[AF_BG] applyDNRFromRules: globally disabled -> removed', removeRuleIds.length, 'added 0');
-        return;
-      }
+      // 移除全局enabled检查，始终处理规则
       for (const rule of rulesCache) {
         if (rule && rule.enabled === false) continue; // 跳过未启用规则
         // --- Redirect rules ---

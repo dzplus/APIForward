@@ -55,7 +55,7 @@
 
   async function loadConfig() {
     const { config = null } = await store.get(['config']);
-    const cfg = config || { enabled: true, forward: { url: '' }, historyLimit: 500, historyMatchOnly: false };
+    const cfg = config || { forward: { url: '' }, historyLimit: 500, historyMatchOnly: false };
     dom.forwardUrl.value = (cfg.forward && cfg.forward.url) || '';
 
     if (dom.historyMatchOnlyToggle) dom.historyMatchOnlyToggle.checked = !!cfg.historyMatchOnly;
@@ -70,7 +70,6 @@
   dom.saveConfigBtn.addEventListener('click', async () => {
     const { config = null } = await store.get(['config']);
     const merged = {
-      enabled: (config && typeof config.enabled !== 'undefined') ? !!config.enabled : true,
       forward: { url: dom.forwardUrl.value.trim() },
       historyLimit: (config && config.historyLimit) || 500,
       historyMatchOnly: !!(dom.historyMatchOnlyToggle && dom.historyMatchOnlyToggle.checked)

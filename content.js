@@ -14,21 +14,81 @@
       s.type = 'text/javascript';
       s.dataset.af = '1';
       s.addEventListener('load', () => {
-        try { console.log('[AF_CS] main-world injected via DOM'); } catch (_) {}
-        try { window.postMessage({ ns: 'AF', type: 'AF_GET_CONFIG' }, '*'); } catch (_) {}
+        try { console.log('[AF_CS] main-world injected via DOM'); } catch (_) { }
+        try { window.postMessage({ ns: 'AF', type: 'AF_GET_CONFIG' }, '*'); } catch (_) { }
       });
       (document.documentElement || document.head || document.body).appendChild(s);
     }
-  } catch (e) { try { console.warn('[AF_CS] main-world injection fallback error:', e); } catch (_) {} }
+  } catch (e) { try { console.warn('[AF_CS] main-world injection fallback error:', e); } catch (_) { } }
 
   const originalFetch = window.fetch.bind(window);
   /** Native XMLHttpRequest constructor reference (pre-override). */
   const NativeXHR = window.XMLHttpRequest;
 
   let rulesCache = [];
-  let configCache = { enabled: true, forward: { url: "" }, historyLimit: 500, historyMatchOnly: false };
+  let configCache = { forward: { url: "" }, historyLimit: 500, historyMatchOnly: false };
 
   const MAX_BODY_SIZE = 1024 * 1024; // 1MB cap for body capture
+
+  // 应用路径替换规则：支持单个或多个路径替换
+  // url: 原始URL字符串；pathReplace: 路径替换配置（对象或数组）
+  const applyPathReplace = (url, pathReplace) => {
+    if (!pathReplace) return url;
+
+    try {
+      const U = new URL(url, location.origin);
+      const beforePath = U.pathname;
+
+      if (Array.isArray(pathReplace)) {
+        // 多个路径替换，按顺序执行
+        pathReplace.forEach(pr => {
+          if (pr && typeof pr === 'object' && pr.from !== undefined) {
+            U.pathname = U.pathname.replace(pr.from || "", pr.to || "");
+          }
+        });
+      } else if (typeof pathReplace === 'object' && pathReplace.from !== undefined) {
+        // 单个路径替换（向后兼容）
+        U.pathname = U.pathname.replace(pathReplace.from || "", pathReplace.to || "");
+      }
+
+      const newUrl = U.toString();
+      if (newUrl !== url) {
+        console.log('[AF_CS] 路径替换', {
+          from: beforePath,
+          to: U.pathname,
+          rules: Array.isArray(pathReplace) ? pathReplace.length : 1,
+          originalUrl: url
+        });
+      }
+      return newUrl;
+    } catch (_) {
+      return url;
+    }
+  };
+
+  // 应用主机替换规则：支持单个或多个主机替换
+  // url: 原始URL字符串；hostReplace: 主机替换配置（对象或数组）
+  const applyHostReplace = (url, hostReplace) => {
+    if (!hostReplace) return url;
+    try {
+      const U = new URL(url, location.origin);
+      const beforeHost = U.host;
+      if (Array.isArray(hostReplace)) {
+        hostReplace.forEach(hr => {
+          if (hr && typeof hr === 'object' && hr.from !== undefined) {
+            U.host = U.host.replace(hr.from || '', hr.to || '');
+          }
+        });
+      } else if (typeof hostReplace === 'object' && hostReplace.from !== undefined) {
+        U.host = U.host.replace(hostReplace.from || '', hostReplace.to || '');
+      }
+      const newUrl = U.toString();
+      if (newUrl !== url) {
+        console.log('[AF_CS] 主机替换', { from: beforeHost, to: U.host, rules: Array.isArray(hostReplace) ? hostReplace.length : 1, originalUrl: url });
+      }
+      return newUrl;
+    } catch (_) { return url; }
+  };
 
   /**
    * Convert wildcard pattern to a case-insensitive RegExp.
@@ -54,7 +114,7 @@
     const conds = [];
     if (rule.exact) conds.push(url === rule.exact);
     if (rule.wildcard) conds.push(wildcardToRegExp(rule.wildcard).test(url));
-    if (rule.regex) { try { conds.push(new RegExp(rule.regex).test(url)); } catch (_) {} }
+    if (rule.regex) { try { conds.push(new RegExp(rule.regex).test(url)); } catch (_) { } }
     if (rule.any && Array.isArray(rule.any)) conds.push(rule.any.some(r => matchByRule(url, m, r)));
     if (rule.all && Array.isArray(rule.all)) conds.push(rule.all.every(r => matchByRule(url, m, r)));
     return conds.length ? conds.some(Boolean) : false;
@@ -148,20 +208,19 @@
       const resp = await chrome.runtime.sendMessage({ type: "getConfig" });
       rulesCache = resp.rules || [];
       configCache = resp.config || configCache;
-      console.log('[AF_CS] initConfig', { rulesCount: rulesCache.length, enabled: !!configCache.enabled, forwardUrl: (configCache.forward && configCache.forward.url) || '' });
-      try { window.postMessage({ ns: "AF", type: "AF_CONFIG_UPDATE", data: { config: configCache, rules: rulesCache } }, "*" ); } catch (_) {}
-    } catch (_) {
+      console.log('[AF_CS] initConfig', { rulesCount: rulesCache.length, forwardUrl: (configCache.forward && configCache.forward.url) || '' });
+      try { window.postMessage({ ns: "AF", type: "AF_CONFIG_UPDATE", data: { config: configCache, rules: rulesCache } }, "*"); } catch (_) { }
+    } catch (e) {
+      if (e.message && e.message.includes('Extension context invalidated')) {
+        console.log('[AF_CS] 扩展上下文已失效，停止初始化');
+        return;
+      }
+      console.log('[AF_CS] 获取初始配置失败:', String(e));
       // ignore in non-extension
     }
   }
 
-  /**
-   * Send a structured log record to background.
-   * @param {Object} record - Log payload
-   */
-  function logRecord(record) {
-    try { chrome.runtime.sendMessage({ type: "logRecord", record }); } catch (_) {}
-  }
+
 
   /**
    * Determine whether to forward payload based on config and rule override.
@@ -169,8 +228,26 @@
    * @returns {boolean} True if forwarding is enabled
    */
   function shouldForward(rule) {
-    if (!rule || rule.forward !== true) return false;
-    return !!(configCache.forward && configCache.forward.url);
+    const hasRule = !!rule;
+    const ruleForwardEnabled = rule && rule.forward === true;
+    const hasForwardUrl = !!(configCache.forward && configCache.forward.url);
+
+    console.log('[AF_CS] 检查是否需要转发', {
+      hasRule,
+      ruleForwardEnabled,
+      hasForwardUrl,
+      forwardUrl: configCache.forward && configCache.forward.url,
+      ruleName: rule && rule.name
+    });
+
+    if (!rule || rule.forward !== true) {
+      console.log('[AF_CS] 不转发：规则未启用转发');
+      return false;
+    }
+
+    const shouldForwardResult = !!(configCache.forward && configCache.forward.url);
+    console.log('[AF_CS] 转发决定:', shouldForwardResult);
+    return shouldForwardResult;
   }
 
   /**
@@ -178,16 +255,34 @@
    * @param {Object} payload - Forwarded data
    */
   async function forwardToServer(payload) {
+    console.log('[AF_CS] 准备转发载荷到服务器', {
+      type: payload.type,
+      method: payload.method,
+      url: payload.url,
+      status: payload.status,
+      forwardUrl: configCache.forward && configCache.forward.url
+    });
     try {
+      console.log('[AF_CS] 通过background转发载荷...');
       await chrome.runtime.sendMessage({ type: 'forwardPayload', payload });
-    } catch (_) {
+      console.log('[AF_CS] background转发成功');
+    } catch (e) {
+      if (e.message && e.message.includes('Extension context invalidated')) {
+        console.log('[AF_CS] 扩展上下文已失效，尝试直接转发');
+      } else {
+        console.log('[AF_CS] background转发失败，尝试直接转发:', String(e));
+      }
       try {
+        console.log('[AF_CS] 直接向服务器转发载荷...');
         await originalFetch(configCache.forward.url, {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify(payload)
         });
-      } catch (_) {}
+        console.log('[AF_CS] 直接转发成功');
+      } catch (e2) {
+        console.log('[AF_CS] 直接转发也失败:', String(e2));
+      }
     }
   }
 
@@ -200,12 +295,12 @@
     const method = (init && init.method) || (typeof input === "object" && input.method) || "GET";
     const start = Date.now();
     const rule = findFirstMatch(url, method);
-    console.log('[AF_CS] fetch.begin', { method, url, hasInit: !!init, isRequest: (input instanceof Request), matched: !!rule });
+    console.log('[AF_CS] fetch.begin', { method, url, hasInit: !!init, isRequest: (input instanceof Request), matched: !!rule, originalUrl: url });
 
     let newUrl = url;
     let newInit = { ...(init || {}) };
 
-    if (configCache.enabled && rule) {
+    if (rule) {
       const before = { url: newUrl, headerCount: (() => { try { const h = new Headers(newInit.headers || {}); return Array.from(h.keys()).length; } catch (_) { return 0; } })(), hasBody: newInit.body !== undefined };
       // pre-request: modify params
       if (rule.modify) {
@@ -217,14 +312,14 @@
       // redirect (app-level)
       const redirect = rule.action && rule.action.redirect;
       if (typeof redirect === "string" && redirect.startsWith("http")) newUrl = redirect;
-      else if (redirect && redirect.pathReplace) {
-        try { const u = new URL(newUrl, location.origin); u.pathname = u.pathname.replace(redirect.pathReplace.from || "", redirect.pathReplace.to || ""); newUrl = u.toString(); } catch (_) {}
+      else if (redirect && typeof redirect === 'object') {
+        if (redirect.hostReplace) newUrl = applyHostReplace(newUrl, redirect.hostReplace);
+        if (redirect.pathReplace) newUrl = applyPathReplace(newUrl, redirect.pathReplace);
       }
       const after = { url: newUrl, headerCount: (() => { try { const h = new Headers(newInit.headers || {}); return Array.from(h.keys()).length; } catch (_) { return 0; } })(), hasBody: newInit.body !== undefined };
-      console.log('[AF_CS] fetch.apply', { method, matched: !!rule, before, after });
+      console.log('[AF_CS] fetch.apply', { method, matched: !!rule, before, after, originalUrl: url });
     }
-    // always log pre-request; background decides whether to keep based on historyMatchOnly
-    logRecord({ type: "pre-request", ts: Date.now(), method, url, finalUrl: newUrl, source: "fetch", matched: !!rule });
+    // 移除了logRecord调用
 
     let response;
     try {
@@ -254,7 +349,7 @@
         response = await originalFetch(newUrl, newInit);
       }
     } catch (err) {
-      logRecord({ type: "error", ts: Date.now(), method, url: newUrl, error: String(err), source: "fetch", matched: !!rule });
+      // 移除了logRecord调用
       throw err;
     }
 
@@ -264,10 +359,10 @@
       let headersObj = {};
       clone.headers.forEach((v, k) => { headersObj[k] = v; });
       let bodyText = "";
-      try { bodyText = await clone.text(); } catch (_) {}
+      try { bodyText = await clone.text(); } catch (_) { }
 
       // 应用响应修改（仅当规则配置了 responseModify）
-      if (configCache.enabled && rule && rule.responseModify) {
+      if (rule && rule.responseModify) {
         const newHeaders = new Headers(response.headers);
         // 改头由 DNR 处理，这里仅根据规则修改响应体
         // const rh = rule.responseModify.headers;
@@ -311,9 +406,9 @@
         source: "fetch",
         matched: !!rule
       };
-      logRecord(payload);
-      if (configCache.enabled && shouldForward(rule)) await forwardToServer(payload);
-    } catch (_) {}
+      // 移除了logRecord调用
+      if (shouldForward(rule)) await forwardToServer(payload);
+    } catch (_) { }
 
     return response;
   };
@@ -334,20 +429,23 @@
         url = String(u || "");
         rule = findFirstMatch(url, method);
         originalUrl = url;
-        if (configCache.enabled && rule) {
-          if (rule.modify && rule.modify.query) url = applyQueryChanges(url, rule.modify.query);
-          const redirect = rule.action && rule.action.redirect;
-          if (typeof redirect === "string" && redirect.startsWith("http")) {
-            url = redirect;
-          } else if (redirect && redirect.pathReplace) {
-            try {
-              const uObj = new URL(url, location.origin);
-              uObj.pathname = uObj.pathname.replace(redirect.pathReplace.from || "", redirect.pathReplace.to || "");
-              url = uObj.toString();
-            } catch (_) {}
-          }
+        if (rule) {
+          // 确保使用完整URL进行处理
+          const fullUrl = (() => { try { return new URL(url, location.href).toString(); } catch (_) { return url; } })();
+          let processedUrl = fullUrl;
+          
+          if (rule.modify && rule.modify.query) processedUrl = applyQueryChanges(processedUrl, rule.modify.query);
+        const redirect = rule.action && rule.action.redirect;
+        if (typeof redirect === "string" && redirect.startsWith("http")) {
+          processedUrl = redirect;
+        } else if (redirect && typeof redirect === 'object') {
+          if (redirect.hostReplace) processedUrl = applyHostReplace(processedUrl, redirect.hostReplace);
+          if (redirect.pathReplace) processedUrl = applyPathReplace(processedUrl, redirect.pathReplace);
         }
-        console.log('[AF_CS] xhr.open', { method, url: originalUrl, finalUrl: url, matched: !!rule });
+          
+          url = processedUrl;
+        }
+        console.log('[AF_CS] xhr.open', { method, url: originalUrl, finalUrl: url, matched: !!rule, originalUrl: originalUrl });
         return origOpen(method, url, async, user, pass);
       };
 
@@ -358,19 +456,19 @@
 
       xhr.send = function (body) {
         sendBody = body;
-        const triedBodyChange = !!(configCache.enabled && rule && rule.modify && rule.modify.body);
+        const triedBodyChange = !!(rule && rule.modify && rule.modify.body);
         if (triedBodyChange) {
           sendBody = applyBodyChanges(sendBody, {}, rule.modify.body);
         }
-        console.log('[AF_CS] xhr.send', { method, url: originalUrl, finalUrl: url, matched: !!rule, hasBody: body !== undefined, triedBodyChange });
-        logRecord({ type: "pre-request", ts: Date.now(), method, url: originalUrl, finalUrl: url, source: "xhr", matched: !!rule });
+        console.log('[AF_CS] xhr.send', { method, url: originalUrl, finalUrl: url, matched: !!rule, hasBody: body !== undefined, triedBodyChange, originalUrl: originalUrl });
+        // 移除了logRecord调用
         return origSend(sendBody);
       };
 
       xhr.addEventListener("load", async () => {
         try {
           let bodyText = "";
-          try { bodyText = xhr.responseText || ""; } catch (_) {}
+          try { bodyText = xhr.responseText || ""; } catch (_) { }
           if (bodyText && bodyText.length > MAX_BODY_SIZE) bodyText = bodyText.slice(0, MAX_BODY_SIZE);
 
           const raw = xhr.getAllResponseHeaders() || "";
@@ -392,13 +490,13 @@
             source: "xhr",
             matched: !!rule
           };
-          logRecord(payload);
-          if (configCache.enabled && shouldForward(rule)) await forwardToServer(payload);
-        } catch (_) {}
+          // 移除了logRecord调用
+          if (shouldForward(rule)) await forwardToServer(payload);
+        } catch (_) { }
       });
 
       xhr.addEventListener("error", () => {
-        logRecord({ type: "error", ts: Date.now(), method, url, error: "xhr error", source: "xhr", matched: !!rule });
+        // 移除了logRecord调用
       });
 
       return xhr;
@@ -413,15 +511,15 @@
     if (area === "local") {
       if (changes.config) {
         configCache = changes.config.newValue || configCache;
-        console.log('[AF_CS] storage(local).config -> bridge AF_CONFIG_UPDATE', { enabled: !!configCache.enabled, forwardUrl: (configCache.forward && configCache.forward.url) || '' });
-        try { window.postMessage({ ns: "AF", type: "AF_CONFIG_UPDATE", data: { config: configCache, rules: rulesCache } }, "*"); } catch (_) {}
+        console.log('[AF_CS] storage(local).config -> bridge AF_CONFIG_UPDATE', { forwardUrl: (configCache.forward && configCache.forward.url) || '' });
+        try { window.postMessage({ ns: "AF", type: "AF_CONFIG_UPDATE", data: { config: configCache, rules: rulesCache } }, "*"); } catch (_) { }
       }
     }
     if (area === "sync") {
       if (changes.rules) {
         rulesCache = changes.rules.newValue || [];
         console.log('[AF_CS] storage(sync).rules -> bridge AF_CONFIG_UPDATE', { rulesCount: rulesCache.length });
-        try { window.postMessage({ ns: "AF", type: "AF_CONFIG_UPDATE", data: { config: configCache, rules: rulesCache } }, "*"); } catch (_) {}
+        try { window.postMessage({ ns: "AF", type: "AF_CONFIG_UPDATE", data: { config: configCache, rules: rulesCache } }, "*"); } catch (_) { }
       }
     }
   });
@@ -433,13 +531,11 @@
     if (msg.type === "AF_GET_CONFIG") {
       console.log('[AF_CS] bridge: AF_GET_CONFIG -> request config from background');
       chrome.runtime.sendMessage({ type: "getConfig" }, (res) => {
-        console.log('[AF_CS] bridge: AF_CONFIG_UPDATE <- background response', { rulesCount: (res && res.rules && res.rules.length) || 0, enabled: !!(res && res.config && res.config.enabled) });
-        try { window.postMessage({ ns: "AF", type: "AF_CONFIG_UPDATE", data: res || {} }, "*" ); } catch (_) {}
+        console.log('[AF_CS] bridge: AF_CONFIG_UPDATE <- background response', { rulesCount: (res && res.rules && res.rules.length) || 0 });
+        try { window.postMessage({ ns: "AF", type: "AF_CONFIG_UPDATE", data: res || {} }, "*"); } catch (_) { }
       });
     } else if (msg.type === "AF_LOG_RECORD") {
-      const record = (msg.data && msg.data.record) || msg.record;
-      console.log('[AF_CS] bridge: AF_LOG_RECORD -> background', { type: record && record.type, url: record && record.url, matched: record && record.matched });
-      if (record) chrome.runtime.sendMessage({ type: "logRecord", record });
+      // 移除了logRecord相关的桥接逻辑
     } else if (msg.type === "AF_FORWARD_PAYLOAD") {
       const payload = (msg.data && msg.data.payload) || msg.payload;
       console.log('[AF_CS] bridge: AF_FORWARD_PAYLOAD -> background');

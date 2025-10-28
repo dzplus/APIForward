@@ -16,7 +16,6 @@
   };
 
   const dom = {
-    enabledToggle: document.getElementById("enabledToggle"),
     searchInput: document.getElementById("searchInput"),
     exportBtn: document.getElementById("exportBtn"),
     clearBtn: document.getElementById("clearBtn"),
@@ -41,6 +40,10 @@
     reqBodyEditor: document.getElementById('reqBodyEditor'),
     reqPathFrom: document.getElementById('reqPathFrom'),
     reqPathTo: document.getElementById('reqPathTo'),
+    reqPathTable: document.getElementById('reqPathTable'),
+    reqPathAdd: document.getElementById('reqPathAdd'),
+    reqHostTable: document.getElementById('reqHostTable'),
+    reqHostAdd: document.getElementById('reqHostAdd'),
     resHeadersTable: document.getElementById('resHeadersTable'),
     resHeaderAdd: document.getElementById('resHeaderAdd'),
     resBodyEditor: document.getElementById('resBodyEditor'),
@@ -97,8 +100,7 @@
   async function loadConfig() {
     const { config = null, history = [] } = await storeLocal.get(["config", "history"]);
     const { rules = null } = await storeSync.get(["rules"]);
-    const cfg = config || { enabled: true, forward: { url: "" }, historyLimit: 500 };
-    dom.enabledToggle.checked = !!cfg.enabled;
+    const cfg = config || { forward: { url: "" }, historyLimit: 500 };
 
     const rs = rules || SAMPLE_RULES;
     rulesCache = Array.isArray(rs) ? rs : [];
@@ -123,7 +125,7 @@
       const type = r.wildcard ? 'wildcard' : (r.regex ? 'regex' : (r.exact ? 'exact' : ''));
       const pattern = r.wildcard || r.regex || r.exact || '';
       const name = r.name || '(未命名)';
-      const forwardChecked = (r.forward === false) ? '' : 'checked';
+      const forwardChecked = (r.forward === true) ? 'checked' : '';
       const enabledChecked = (r.enabled === false) ? '' : 'checked';
       return `<tr><td>${name}</td><td>${type}</td><td title="${pattern}">${pattern}</td><td><input type="checkbox" class="rule-forward" data-idx="${idx}" ${forwardChecked} /></td><td><input type="checkbox" class="rule-enabled" data-idx="${idx}" ${enabledChecked} /></td><td><button data-idx="${idx}" class="edit">编辑</button> <button data-idx="${idx}" class="del">删除</button></td></tr>`;
     }).join('');
@@ -133,7 +135,11 @@
         const idx = Number(input.dataset.idx);
         const checked = input.checked;
         const rule = rulesCache[idx] || {};
-        if (!checked) { rule.forward = false; } else { if ('forward' in rule) delete rule.forward; }
+        if (!checked) { 
+          rule.forward = false; 
+        } else { 
+          rule.forward = true; 
+        }
         rulesCache[idx] = rule;
         await storeSync.set({ rules: rulesCache });
         if (isExt) try { await chrome.runtime.sendMessage({ type: 'setRules', rules: rulesCache }); } catch (_) {}
@@ -175,19 +181,6 @@
 
   dom.searchInput.addEventListener('input', renderHistory);
 
-  // 启用开关仅更新 enabled，其它配置在选项页维护
-  dom.enabledToggle.addEventListener('change', async () => {
-    const { config = null } = await storeLocal.get(['config']);
-    const merged = {
-      enabled: dom.enabledToggle.checked,
-      forward: { url: ((config && config.forward && config.forward.url) || '') },
-      historyLimit: (config && config.historyLimit) || 500,
-      historyMatchOnly: (config && typeof config.historyMatchOnly !== 'undefined') ? !!config.historyMatchOnly : false
-    };
-    await storeLocal.set({ config: merged });
-    if (isExt) try { await chrome.runtime.sendMessage({ type: 'setConfig', config: merged }); } catch (_) {}
-  });
-
   dom.exportBtn.addEventListener('click', async () => {
     if (isExt) {
       try { await chrome.runtime.sendMessage({ type: 'exportHistory' }); } catch (e) { alert('导出失败：' + e.message); }
@@ -220,11 +213,11 @@
     if (dom.wizMatchType) dom.wizMatchType.value = 'wildcard';
     if (dom.wizPattern) dom.wizPattern.value = '';
     if (dom.reqBodyEditor) dom.reqBodyEditor.value = '';
-    if (dom.reqPathFrom) dom.reqPathFrom.value = '';
-    if (dom.reqPathTo) dom.reqPathTo.value = '';
     if (dom.resBodyEditor) dom.resBodyEditor.value = '';
     if (dom.reqHeadersTable) dom.reqHeadersTable.querySelector('tbody').innerHTML = '';
     if (dom.reqQueryTable) dom.reqQueryTable.querySelector('tbody').innerHTML = '';
+    if (dom.reqPathTable) dom.reqPathTable.querySelector('tbody').innerHTML = '';
+    if (dom.reqHostTable) dom.reqHostTable.querySelector('tbody').innerHTML = '';
     if (dom.resHeadersTable) dom.resHeadersTable.querySelector('tbody').innerHTML = '';
   }
   // 从已有规则填充向导字段
@@ -261,15 +254,41 @@
       dom.reqBodyEditor.value = reqBodyText;
     }
     // 路径替换
-    if (dom.reqPathFrom && dom.reqPathTo) {
-      let from = '', to = '';
+    if (dom.reqPathTable) {
+      const tbody = dom.reqPathTable.querySelector('tbody');
+      tbody.innerHTML = '';
       const ar = rule.action && rule.action.redirect ? rule.action.redirect : null;
       if (ar && typeof ar === 'object' && ar.pathReplace) {
-        from = ar.pathReplace.from || '';
-        to = ar.pathReplace.to || '';
+        // 支持单个路径替换（向后兼容）
+        if (typeof ar.pathReplace === 'object' && ar.pathReplace.from !== undefined) {
+          addRow(dom.reqPathTable, ar.pathReplace.from || '', ar.pathReplace.to || '');
+        }
+        // 支持多个路径替换
+        else if (Array.isArray(ar.pathReplace)) {
+          ar.pathReplace.forEach(pr => {
+            if (pr && typeof pr === 'object') {
+              addRow(dom.reqPathTable, pr.from || '', pr.to || '');
+            }
+          });
+        }
       }
-      dom.reqPathFrom.value = from;
-      dom.reqPathTo.value = to;
+    }
+    // Host 替换
+    if (dom.reqHostTable) {
+      const tbody = dom.reqHostTable.querySelector('tbody');
+      tbody.innerHTML = '';
+      const ar = rule.action && rule.action.redirect ? rule.action.redirect : null;
+      if (ar && typeof ar === 'object' && ar.hostReplace) {
+        if (typeof ar.hostReplace === 'object' && ar.hostReplace.from !== undefined) {
+          addRow(dom.reqHostTable, ar.hostReplace.from || '', ar.hostReplace.to || '');
+        } else if (Array.isArray(ar.hostReplace)) {
+          ar.hostReplace.forEach(hr => {
+            if (hr && typeof hr === 'object') {
+              addRow(dom.reqHostTable, hr.from || '', hr.to || '');
+            }
+          });
+        }
+      }
     }
     // 响应头
     if (dom.resHeadersTable) {
@@ -308,6 +327,8 @@
 
   dom.reqHeaderAdd.addEventListener('click', () => addRow(dom.reqHeadersTable));
   dom.reqQueryAdd.addEventListener('click', () => addRow(dom.reqQueryTable));
+  dom.reqPathAdd.addEventListener('click', () => addRow(dom.reqPathTable));
+  dom.reqHostAdd.addEventListener('click', () => addRow(dom.reqHostTable));
   dom.resHeaderAdd.addEventListener('click', () => addRow(dom.resHeadersTable));
 
   dom.modalConfirm.addEventListener('click', async () => {
@@ -325,8 +346,8 @@
     const headersRows = Array.from(dom.reqHeadersTable.querySelectorAll('tbody tr')).map(tr => ({ k: tr.children[0].querySelector('input').value.trim(), v: tr.children[1].querySelector('input').value.trim() })).filter(x => x.k);
     const queryRows = Array.from(dom.reqQueryTable.querySelectorAll('tbody tr')).map(tr => ({ k: tr.children[0].querySelector('input').value.trim(), v: tr.children[1].querySelector('input').value.trim() })).filter(x => x.k);
     const reqBody = dom.reqBodyEditor.value.trim();
-    const pathFrom = (dom.reqPathFrom && dom.reqPathFrom.value.trim()) || '';
-    const pathTo = (dom.reqPathTo && dom.reqPathTo.value.trim()) || '';
+    const pathRows = Array.from(dom.reqPathTable.querySelectorAll('tbody tr')).map(tr => ({ from: tr.children[0].querySelector('input').value.trim(), to: tr.children[1].querySelector('input').value.trim() })).filter(x => x.from);
+    const hostRows = Array.from(dom.reqHostTable.querySelectorAll('tbody tr')).map(tr => ({ from: tr.children[0].querySelector('input').value.trim(), to: tr.children[1].querySelector('input').value.trim() })).filter(x => x.from);
 
     // 重建 modify
     delete rule.modify;
@@ -339,10 +360,33 @@
       }
     }
 
-    // 路径替换重定向（仅当填写了 from/to 时更新；否则保留原值）
-    if (pathFrom && pathTo) {
-      rule.action = rule.action || {};
-      rule.action.redirect = { pathReplace: { from: pathFrom, to: pathTo } };
+    // 连接替换（Host 与 Path）
+    rule.action = rule.action || {};
+    rule.action.redirect = rule.action.redirect || {};
+    // 路径替换
+    if (pathRows.length > 0) {
+      if (pathRows.length === 1) {
+        rule.action.redirect.pathReplace = { from: pathRows[0].from, to: pathRows[0].to };
+      } else {
+        rule.action.redirect.pathReplace = pathRows.map(pr => ({ from: pr.from, to: pr.to }));
+      }
+    } else {
+      if (rule.action.redirect.pathReplace) delete rule.action.redirect.pathReplace;
+    }
+    // Host 替换
+    if (hostRows.length > 0) {
+      if (hostRows.length === 1) {
+        rule.action.redirect.hostReplace = { from: hostRows[0].from, to: hostRows[0].to };
+      } else {
+        rule.action.redirect.hostReplace = hostRows.map(hr => ({ from: hr.from, to: hr.to }));
+      }
+    } else {
+      if (rule.action.redirect.hostReplace) delete rule.action.redirect.hostReplace;
+    }
+    // 清空空对象
+    if (rule.action.redirect && Object.keys(rule.action.redirect).length === 0) {
+      delete rule.action.redirect;
+      if (rule.action && Object.keys(rule.action).length === 0) delete rule.action;
     }
 
     // 响应拦截（仅 fetch 可应用）

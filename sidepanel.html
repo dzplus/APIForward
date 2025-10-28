@@ -12,16 +12,6 @@
     <button id="openOptionsBtn">打开选项页</button>
   </header>
 
-  <section class="card">
-    <h2>拦截控制</h2>
-    <label class="switch">
-      <input type="checkbox" id="enabledToggle" />
-      <span class="slider"></span>
-    </label>
-    <span>启用拦截</span>
-  </section>
-
-
   <div id="modalOverlay" class="modal-overlay"></div>
   <div id="ruleModal" class="modal" aria-modal="true" role="dialog" aria-labelledby="ruleModalTitle">
     <div class="modal-dialog">
@@ -67,12 +57,19 @@
             <h4>请求体修改</h4>
             <textarea id="reqBodyEditor" placeholder="JSON 或文本。JSON 将尝试合并为 jsonMerge；否则作为字符串替换"></textarea>
             <h4>连接替换 / 重定向</h4>
-            <div class="form-row">
-              <label>路径替换（from → to）</label>
-              <input id="reqPathFrom" placeholder="如 /api/v1" />
-              <input id="reqPathTo" placeholder="如 /api/v2" />
-            </div>
-            <p class="hint">说明：当请求 URL 的路径包含“from”时，替换为“to”。</p>
+            <table id="reqPathTable" class="kv-table">
+              <thead><tr><th>From</th><th>To</th><th>操作</th></tr></thead>
+              <tbody></tbody>
+            </table>
+            <button id="reqPathAdd">添加路径替换</button>
+            <p class="hint">说明：当请求 URL 的路径包含"from"时，替换为"to"。支持多个替换规则，按顺序执行。</p>
+            <h4>Host 替换</h4>
+            <table id="reqHostTable" class="kv-table">
+              <thead><tr><th>From Host</th><th>To Host</th><th>操作</th></tr></thead>
+              <tbody></tbody>
+            </table>
+            <button id="reqHostAdd">添加 Host 替换</button>
+            <p class="hint">说明：当请求 URL 的主机名包含"from"时，替换为"to"。支持多个替换规则，按顺序执行。</p>
           </div>
 
           <div class="wizard-pane" data-step="3">
@@ -110,11 +107,9 @@
 
   <section class="card">
     <h2>历史记录</h2>
-    <div class="actions">
-      <input id="searchInput" placeholder="按 URL 搜索" />
-      <button id="exportBtn">导出</button>
-      <button id="clearBtn">清空</button>
-    </div>
+    <input id="searchInput" placeholder="按 URL 搜索" />
+    <button id="exportBtn">导出</button>
+    <button id="clearBtn">清空</button>
     <table id="historyTable" class="list-table">
       <thead><tr><th>时间</th><th>方法</th><th>状态</th><th>URL</th><th>来源</th></tr></thead>
       <tbody></tbody>
